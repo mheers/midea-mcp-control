@@ -160,7 +160,11 @@ func (r *Runner) Run(ctx context.Context) ([]Result, error) {
 		result.Device = device.Public()
 		result.Changed = !sameCredential(existing, device)
 		updates[device.ID] = device
-		fmt.Fprintf(r.Out, "  %s: credential verified over LAN\n", local.describe())
+		if result.Changed {
+			fmt.Fprintf(r.Out, "  %s: credential fetched, verified over LAN (rotated)\n", local.describe())
+		} else {
+			fmt.Fprintf(r.Out, "  %s: credential verified over LAN (unchanged)\n", local.describe())
+		}
 		results = append(results, result)
 	}
 
@@ -316,7 +320,9 @@ func (d discoveredDevice) toConfig(name string, credential cloud.Credential, met
 	}
 }
 
-// sameCredential reports whether the stored credential already matches.
+// sameCredential reports whether the stored credential already matches the
+// freshly issued one. The cloud mints a new pair per request, so this is
+// usually false for an already-configured device.
 func sameCredential(existing config.File, candidate config.Device) bool {
 	for _, device := range existing.Devices {
 		if device.ID == candidate.ID {

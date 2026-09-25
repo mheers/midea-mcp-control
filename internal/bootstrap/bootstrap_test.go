@@ -355,6 +355,55 @@ func TestMergeKeepsNamesUnique(t *testing.T) {
 	}
 }
 
+func TestRunReportsRotationOfExistingCredential(t *testing.T) {
+	// A device that is already configured with a different credential must be
+	// reported as rotated, because the cloud mints a new pair per request.
+	path := t.TempDir() + "/devices.json"
+	existing := config.File{Format: 1, Devices: []config.Device{{
+		ID: "100000000000001", Name: "bedroom", IP: "192.0.2.131", Port: 6444,
+		Type: 0xac, Model: "00000Q18", Protocol: 3,
+		Token: testTokenB, Key: testKeyB,
+	}}}
+	if err := config.Save(path, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newRunner(t, fullCloud(), allAccept())
+	runner.ConfigPath = path
+	results, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Device.ID == "100000000000001" && !result.Changed {
+			t.Error("a re-issued credential was not reported as changed")
+		}
+	}
+}
+
+func TestRunReportsUnchangedCredential(t *testing.T) {
+	path := t.TempDir() + "/devices.json"
+	existing := config.File{Format: 1, Devices: []config.Device{{
+		ID: "100000000000001", Name: "bedroom", IP: "192.0.2.131", Port: 6444,
+		Type: 0xac, Model: "00000Q18", Protocol: 3,
+		Token: testTokenA, Key: testKeyA,
+	}}}
+	if err := config.Save(path, existing); err != nil {
+		t.Fatal(err)
+	}
+	runner := newRunner(t, fullCloud(), allAccept())
+	runner.ConfigPath = path
+	results, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Device.ID == "100000000000001" && result.Changed {
+			t.Error("an identical credential was reported as changed")
+		}
+	}
+}
+
 func TestResultsNeverCarrySecrets(t *testing.T) {
 	runner := newRunner(t, fullCloud(), allAccept())
 	results, err := runner.Run(context.Background())

@@ -138,17 +138,38 @@ The MCP boundary does not accept raw tokens, keys, or protocol frames. Its optio
 
 There are two different values involved in V3 LAN authentication:
 
-1. The cloud bootstrap returns a 64-byte device token (128 hex characters) and a 32-byte key (64 hex characters). The app-facing response contains no expiry timestamp. Community implementations and the legacy Midea LAN API treat this pair as a long-lived device credential, so this project stores it and re-authenticates each local connection with it.
-2. The device handshake derives a temporary per-connection local/TCP key. The `msmart-ng` reference implementation marks that derived key as valid for 12 hours; that is not an expiry on the stored token or key. The Go adapter derives it for each short-lived CLI/MCP operation and does not cache it.
+1. The cloud `getToken` response carries a 64-byte device token (128 hex
+   characters) and a 32-byte key (64 hex characters). The response contains no
+   expiry timestamp.
+2. The device handshake derives a temporary per-connection local/TCP key. The
+   `msmart-ng` reference implementation marks that derived key as valid for
+   12 hours; that is not an expiry on the stored token or key. The Go adapter
+   derives it for each short-lived CLI/MCP operation and does not cache it.
 
-No credential system can guarantee that a vendor-issued device secret never becomes invalid: re-pairing/resetting a unit, changing its Wi-Fi module, or a cloud-side revocation can invalidate it. The practical protections here are:
+Measured on this LAN, the behaviour is:
+
+- **The cloud mints a new token/key pair on every `getToken` call.** Three
+  consecutive bootstraps minutes apart produced three different pairs for each
+  unit. `bootstrap` reports this as `(rotated)`.
+- **A previously issued pair keeps working.** After a new pair had been fetched
+  and stored, the previous pair still authenticated all three units over the
+  LAN. A pair first obtained hours earlier also still worked.
+- **Therefore re-running `bootstrap` is safe** for any other consumer that
+  holds an older pair (for example a Home Assistant integration); the device
+  does not revoke the earlier credential. The file's contents do change, so
+  keep a backup of a known-good inventory.
+
+What can still invalidate a stored pair: re-pairing or factory-resetting a
+unit, replacing its Wi-Fi module, or a cloud-side revocation. No credential
+system can promise a vendor-issued secret survives those. The practical
+protections here are:
 
 - keep the mode-`0600` inventory file backed up offline;
 - run `midea-control verify` periodically (for example, from a user-level timer) to detect invalidation; a simple hourly crontab entry is `0 * * * * /absolute/path/to/bin/midea-control verify --timeout 30s >/dev/null`;
 - rerun `midea-control bootstrap` if a unit is re-paired or a verification fails;
 - never commit the inventory or the bootstrap account credentials.
 
-`midea-control audit` deliberately reports `expiry: none reported` rather than claiming an expiry that the vendor did not provide.
+`midea-control audit` deliberately reports `expiry: none reported` rather than claiming an expiry the vendor never provided.
 
 ## Development
 
