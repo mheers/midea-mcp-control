@@ -16,6 +16,24 @@ Everything is standard-library Go plus pinned pure-Go modules: **no Python, no
 The library research and protocol notes behind these choices are in
 `docs/research/midea-control-research.md`.
 
+## Status and caveats
+
+- The Midea cloud protocol is reverse-engineered and undocumented. The LAN side
+  is stable in practice; the cloud bootstrap endpoints can change without
+  notice. If `bootstrap` ever stops working, normal local control will not.
+- The LAN protocol dependency is a community project pinned to a single
+  immutable commit. It was written for one specific appliance, so decoding
+  beyond the fields listed under [Scope](#scope) is unvalidated. It sits behind
+  a small internal interface so it can be replaced.
+- `sleep`, `eco`, `turbo` and `display` are not honoured by the hardware tested
+  here, and `swing` only works while a unit is running. These are properties of
+  the firmware, not of this tool.
+- Mode and fan-speed *names* come from two independent implementations that
+  agree on the wire encoding and read identical values from real units. The
+  labels have not been confirmed by observing each mode's physical effect;
+  power draw could separate "fan" from compressor modes but not cooling from
+  heating.
+
 ## Scope
 
 Built and validated against Midea protocol **V3** air conditioners
