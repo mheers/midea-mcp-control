@@ -117,27 +117,36 @@ flags accept `--eco true`, `--eco=true` and a bare `--eco` (meaning true).
 
 ### What the writes actually do on this hardware
 
-Measured on all three units, not assumed:
+Measured on all three units, not assumed. The boolean flags behave
+differently when a unit is **off** and when it is **running**, so both columns
+are real data:
 
-| Field | Works? | Notes |
-|---|---|---|
-| power | yes | verified by read-back |
-| mode | yes | `auto`, `cool`, `dry`, `heat`, `fan`, `smart_dry` |
-| temperature | yes | 17–30 °C in 0.5 °C steps |
-| fan speed | yes | `auto`, `silent`, `low`, `medium`, `high`, `full` |
-| eco, turbo, sleep, display, swing | **no** | accepted on the wire, refused by the units |
+| Field | Unit off | Unit running | Notes |
+|---|---|---|---|
+| power | yes | yes | verified by read-back |
+| mode | yes | yes | `auto`, `cool`, `dry`, `heat`, `fan`, `smart_dry` |
+| temperature | yes | yes | 17–30 °C in 0.5 °C steps |
+| fan speed | yes | yes | `auto`, `silent`, `low`, `medium`, `high`, `full` |
+| swing (vertical/horizontal) | **no** | **yes** | only honoured while running |
+| sleep | no | transient | accepted once, then cleared by the unit |
+| eco, turbo, display | no | **no** | accepted on the wire, refused by the hardware |
 
-The unsupported flags are still exposed, because they are part of the protocol
-and may work on other units or while a unit is running. On these models they do
-not take effect, and the tool says so instead of reporting a false success:
+The refused fields stay exposed, because they are part of the protocol and may
+work on other units. The tool reports the disagreement instead of a false
+success:
 
 ```text
-error: command sent to bedroom but read-back disagrees: eco is false, requested true
+error: command sent to living-room but read-back disagrees: turbo is false, requested true
 ```
 
-If you want the remaining question settled — whether the boolean flags work
-while a unit is *running* — that needs a unit to be switched on, which has a
-real physical effect, so it is left for you to decide.
+Two further observations from the running test:
+
+- `eco` once returned `update: no response after 1 attempts`. That is the
+  single-attempt write policy working as intended: the frame is never resent on
+  a timeout, because a blind retry is worse than an honest failure.
+- The `0x40` frame is full-state, so a later write seeded from a fresh read can
+  roll back a flag the unit had silently cleared. That is why `sleep` looked
+  set and then reverted.
 
 ### Write safety
 
