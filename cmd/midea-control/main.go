@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -60,6 +62,8 @@ func run(args []string) error {
 		return runSet(args[1:])
 	case "capabilities":
 		return runCapabilities(args[1:])
+	case "energy":
+		return runEnergy(args[1:])
 	case "bootstrap":
 		return runBootstrap(args[1:])
 	case "on":
@@ -608,18 +612,149 @@ func describeRange(c controller.Capabilities) string {
 	return fmt.Sprintf("%.1f-%.1f°C", min, max)
 }
 
+// runEnergy samples a device's power draw. Sampling matters: an instantaneous
+// reading is not enough to tell a ramping compressor from a bare fan.
+func runEnergy(args []string) error {
+	flags := flag.NewFlagSet("energy", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	path := flags.String("config", config.DefaultPath(), "device inventory path")
+	timeout := flags.Duration("timeout", 30*time.Second, "per-read timeout")
+	samples := flags.Int("samples", 1, "number of samples to take")
+	interval := flags.Duration("interval", 5*time.Second, "delay between samples")
+	asJSON := flags.Bool("json", false, "print JSON")
+	selectors, flagArgs, _ := splitArgs(flags, args, true)
+	if err := flags.Parse(flagArgs); err != nil {
+		return err
+	}
+	if *samples < 1 {
+		return errors.New("samples must be at least 1")
+	}
+
+	file, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	if len(selectors) == 0 {
+		for _, device := range file.PublicDevices() {
+			selectors = append(selectors, device.Name)
+		}
+	}
+	service := mcpserver.NewService()
+	service.ConfigPath = *path
+
+	// Energy sample loop. The unit's realtime power field is zero on this
+	// hardware, so the useful number is the average power derived from the
+	// lifetime-consumption delta between samples.
+	type reading struct {
+		Sample    int                    `json:"sample"`
+		Result    mcpserver.EnergyResult `json:"result"`
+		DeltaKWh  *float64               `json:"delta_kwh,omitempty"`
+		AverageKW *float64               `json:"average_kw,omitempty"`
+	}
+	readings := make([]reading, 0, len(selectors)**samples)
+	previousKWh := map[string]float64{}
+	previousAt := map[string]time.Time{}
+	for _, selector := range selectors {
+		for sample := 1; sample <= *samples; sample++ {
+			ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+			result, err := service.Energy(ctx, selector)
+			cancel()
+			if err != nil {
+				return err
+			}
+			entry := reading{Sample: sample, Result: result}
+			if previous, ok := previousKWh[result.Device.ID]; ok {
+				elapsed := time.Since(previousAt[result.Device.ID])
+				delta := result.Energy.TotalKWh - previous
+				entry.DeltaKWh = &delta
+				if elapsed > 0 {
+					average := delta / elapsed.Hours()
+					entry.AverageKW = &average
+				}
+			}
+			previousKWh[result.Device.ID] = result.Energy.TotalKWh
+			sampledAt := time.Now()
+			previousAt[result.Device.ID] = sampledAt
+			readings = append(readings, entry)
+			if *asJSON {
+				continue
+			}
+			if entry.AverageKW != nil {
+				fmt.Printf("%-14s %2d/%d  avg=%6.3f kW  delta=%+6.3f kWh  (unit reported %6.3f kW)\n",
+					result.Device.Name, sample, *samples, *entry.AverageKW, *entry.DeltaKWh,
+					result.Energy.RealtimeKW)
+			} else {
+				fmt.Printf("%-14s %2d/%d  baseline  total=%8.3f kWh  (unit reported %6.3f kW)\n",
+					result.Device.Name, sample, *samples,
+					result.Energy.TotalKWh, result.Energy.RealtimeKW)
+			}
+			if sample < *samples {
+				time.Sleep(*interval)
+			}
+		}
+	}
+	if *asJSON {
+		return printJSON(readings)
+	}
+	return nil
+}
+
 func runMCP(args []string) error {
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	path := flags.String("config", config.DefaultPath(), "device inventory path")
+	useHTTP := flags.Bool("http", false, "serve Streamable HTTP instead of stdio")
+	httpAddr := flags.String("http-addr", "127.0.0.1:8765", "HTTP listen address (loopback unless --http-allow-remote)")
+	httpTokenFile := flags.String("http-token-file", "", "file holding the bearer token (default: alongside the inventory)")
+	httpStateless := flags.Bool("http-stateless", false, "run without server-side sessions")
+	allowRemote := flags.Bool("http-allow-remote", false, "permit a non-loopback listen address")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+
 	service := mcpserver.NewService()
 	service.ConfigPath = *path
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return service.Run(ctx)
+
+	if !*useHTTP {
+		return service.Run(ctx)
+	}
+
+	token, tokenFile, err := mcpserver.LoadOrCreateToken(os.Getenv("MIDEA_CONTROL_MCP_TOKEN"), *httpTokenFile)
+	if err != nil {
+		return err
+	}
+	server, err := mcpserver.NewHTTPServer(service, mcpserver.HTTPConfig{
+		Addr:        *httpAddr,
+		Token:       token,
+		Stateless:   *httpStateless,
+		AllowRemote: *allowRemote,
+	})
+	if err != nil {
+		return err
+	}
+
+	listener, err := net.Listen("tcp", *httpAddr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", *httpAddr, err)
+	}
+	if tokenFile != "" {
+		fmt.Fprintf(os.Stderr, "mcp http listening on %s (bearer token in %s, mode 0600)\n",
+			listener.Addr(), tokenFile)
+	} else {
+		fmt.Fprintf(os.Stderr, "mcp http listening on %s (bearer token from MIDEA_CONTROL_MCP_TOKEN)\n",
+			listener.Addr())
+	}
+	httpServer := &http.Server{
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func printStatus(result mcpserver.StatusResult) {

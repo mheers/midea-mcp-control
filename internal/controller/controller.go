@@ -172,6 +172,38 @@ func (c *Controller) capabilitiesLocked(ctx context.Context, device config.Devic
 	return fromProtocolCapabilities(capabilities), nil
 }
 
+// energyClient is an optional extension for clients that can measure power.
+type energyClient interface {
+	Energy(context.Context) (midea.Energy, error)
+}
+
+// Energy returns a device's power measurement. Firmware that does not support
+// the query reports zero values rather than failing.
+func (c *Controller) Energy(ctx context.Context, device config.Device) (Energy, error) {
+	if c == nil {
+		return Energy{}, errors.New("controller is nil")
+	}
+	unlock := c.lockDevice(device.ID)
+	defer unlock()
+	client, err := c.client(device, ReadOperation)
+	if err != nil {
+		return Energy{}, err
+	}
+	defer client.Close()
+	if err := client.Connect(ctx); err != nil {
+		return Energy{}, fmt.Errorf("connect %s: %w", device.Name, err)
+	}
+	query, ok := client.(energyClient)
+	if !ok {
+		return Energy{}, errors.New("client does not support energy queries")
+	}
+	energy, err := query.Energy(ctx)
+	if err != nil {
+		return Energy{}, fmt.Errorf("energy %s: %w", device.Name, err)
+	}
+	return fromProtocolEnergy(energy), nil
+}
+
 // SetPower changes only the power bit and verifies the resulting state.
 func (c *Controller) SetPower(ctx context.Context, device config.Device, power bool) (State, error) {
 	return c.Apply(ctx, device, Patch{Power: &power})

@@ -97,6 +97,10 @@ bin/midea-control status
 # What each unit says it supports.
 bin/midea-control capabilities
 
+# Power draw. The unit's own realtime field is always zero on this hardware,
+# so the useful number is the average derived from lifetime kWh deltas.
+bin/midea-control energy living-room --samples 4 --interval 75s
+
 # Authenticate every unit using only the saved LAN credentials.
 bin/midea-control verify
 
@@ -162,7 +166,7 @@ did not ask about; the adapter only requests the changes you specify.
 
 ## MCP over stdio
 
-The MCP command opens no network listener. Configure an MCP client with the built binary:
+The default MCP command opens no network listener. Configure an MCP client with the built binary:
 
 ```json
 {
@@ -182,12 +186,48 @@ Available tools:
 - `discover_devices` — read-only LAN broadcast discovery;
 - `get_status` — read one configured device;
 - `get_capabilities` — read a device's feature report;
+- `get_energy` — read a device's power draw; the only objective way to tell what an operating mode is doing;
 - `set_power` — physical on/off write; requires `confirm: true`, changes only power, and reads back the state;
 - `set_state` — physical write for temperature, mode, fan, swing, eco, turbo, sleep or display; sparse (omitted fields are left alone), requires `confirm: true`, and every requested field is verified by read-back.
 
 `confirm` is a guard against accidental calls, not an authorization boundary: an MCP client that is allowed to reach this local server can still set it to `true`. Keep write-capable MCP clients behind your own human-approval policy.
 
-The MCP boundary does not accept raw tokens, keys, or protocol frames. Its optional discovery target is limited to a private IPv4/loopback address and carries only a fixed read-only probe; control operations only accept configured device selectors. If HTTP transport is added later, bind it to loopback and add authentication and Origin validation before considering any non-loopback exposure.
+The MCP boundary does not accept raw tokens, keys, or protocol frames. Its optional discovery target is limited to a private IPv4/loopback address and carries only a fixed read-only probe; control operations only accept configured device selectors.
+
+## MCP over HTTP
+
+```sh
+bin/midea-control mcp --http                     # 127.0.0.1:8765
+bin/midea-control mcp --http --http-stateless    # no server-side sessions
+bin/midea-control mcp --http --http-addr 127.0.0.1:9000
+```
+
+This server can change a physical device, so the HTTP transport is locked down
+by default:
+
+- **Bearer token required.** There is no way to start it without one. The token
+  comes from `MIDEA_CONTROL_MCP_TOKEN`, or is generated once into
+  `~/.config/midea-control/mcp-token` with mode `0600`. Only the *path* is
+  printed, never the token.
+- **Loopback only.** Binding `0.0.0.0` or a LAN address is refused unless you
+  pass `--http-allow-remote`. Authentication and DNS-rebinding protection stay on
+  even then.
+- **DNS-rebinding protection.** The `Host` header must be a loopback name and a
+  non-empty `Origin` must be a loopback origin. A hostile page that resolves to
+  `127.0.0.1` therefore cannot drive the device from a browser.
+- Token comparison is constant-time and the scheme is matched
+  case-insensitively, per RFC 7235.
+
+```sh
+curl -H "authorization: Bearer $(cat ~/.config/midea-control/mcp-token)" \
+     -H 'content-type: application/json' \
+     -H 'accept: application/json, text/event-stream' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+     http://127.0.0.1:8765/mcp
+```
+
+If you do expose it beyond loopback, put it behind a reverse proxy that
+terminates TLS, and treat the bearer token as a device credential.
 
 ## Token lifetime
 
@@ -237,6 +277,34 @@ CGO_ENABLED=0 go build ./...
 
 The tested seams are configuration permissions/validation, LAN discovery
 parsing, cloud handshake signing and token retrieval (against a fake cloud
-server and vectors captured from the reference implementation), and read/write
-command behavior. The write path is tested with a fake protocol client;
+server and vectors captured from the reference implementation), the HTTP
+transport's authentication and DNS-rebinding defences, and read/write command
+behavior. The write path is tested with a fake protocol client;
 physical-device acceptance was verified separately against all three units.
+
+### CI as code with Dagger
+
+The pipeline is a [Dagger](https://dagger.io) module written in Go, living in
+`.dagger/`. It runs the same checks locally and in CI:
+
+```sh
+dagger call ci
+```
+
+| Function | What it enforces |
+|---|---|
+| `fmt` | no unformatted Go file |
+| `constraints` | no `os/exec`, no `import "C"`, no `.py` file anywhere |
+| `vet` | `go vet` with `CGO_ENABLED=0` |
+| `test` | the unit suite with `CGO_ENABLED=0` |
+| `race` | the suite under the race detector |
+| `build` | cross-compiles linux/amd64, linux/arm64, darwin/arm64, windows/amd64 |
+
+`constraints` exists because "pure Go" is a promise that is trivial to break by
+accident and easy to miss in review. It is a real check, not a comment: the
+pipeline was verified to fail on each of the three violations.
+
+`.github/workflows/ci.yml` calls `dagger call ci` on pushes to `main` and on
+pull requests, and passes **no secrets** — the pipeline is hermetic and never
+touches a device, the inventory, or the vendor cloud. The generated Dagger
+client under `.dagger/internal/` is not committed; the engine regenerates it.

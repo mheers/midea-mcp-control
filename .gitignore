@@ -9,3 +9,9 @@ __pycache__/
 # Go build output
 /bin/
 /midea-control
+
+# Dagger engine state
+.dagger/.env
+
+# local tool caches
+.ruff_cache/

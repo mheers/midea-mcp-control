@@ -101,6 +101,15 @@ func NewMCPServer(service *Service) *sdkmcp.Server {
 		return nil, capabilityOutput{Result: result}, err
 	})
 
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "get_energy",
+		Description: "Read a configured device's power draw. Realtime_kw distinguishes a running compressor from a bare fan, which is the only objective way to tell what an operating mode is doing.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input deviceInput) (*sdkmcp.CallToolResult, energyOutput, error) {
+		result, err := service.Energy(ctx, input.Device)
+		return nil, energyOutput{Result: result}, err
+	})
+
 	return server
 }
 

@@ -93,6 +93,27 @@ type CapabilityResult struct {
 	Capabilities controller.Capabilities `json:"capabilities"`
 }
 
+// EnergyResult pairs a device with a power measurement.
+type EnergyResult struct {
+	Device config.PublicDevice `json:"device"`
+	Energy controller.Energy   `json:"energy"`
+}
+
+// Energy reports a device's power draw.
+func (s *Service) Energy(ctx context.Context, selector string) (EnergyResult, error) {
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	device, err := s.find(selector)
+	if err != nil {
+		return EnergyResult{}, err
+	}
+	energy, err := s.control().Energy(ctx, device)
+	if err != nil {
+		return EnergyResult{}, err
+	}
+	return EnergyResult{Device: device.Public(), Energy: energy}, nil
+}
+
 // Apply changes device state after an explicit confirmation. The patch is
 // sparse: unmentioned fields keep their current values.
 func (s *Service) Apply(ctx context.Context, selector string, patch controller.Patch, confirm bool) (StatusResult, error) {
@@ -308,4 +329,8 @@ type powerOutput struct {
 
 type capabilityOutput struct {
 	Result CapabilityResult `json:"result" jsonschema:"device feature report"`
+}
+
+type energyOutput struct {
+	Result EnergyResult `json:"result" jsonschema:"power measurement"`
 }

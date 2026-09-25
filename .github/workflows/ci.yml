@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dagger:
+    name: pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # The pipeline cross-compiles from source; generated Dagger bindings
+          # are rebuilt by the engine, so they do not need to be committed.
+          fetch-depth: 1
+
+      - name: Run the Dagger pipeline
+        uses: dagger/dagger@v0.20.8
+        with:
+          # An empty version uses the engine version pinned in dagger.json.
+          version: ""
+          args: call ci
+          # No secrets are passed in, and none are needed: the pipeline is
+          # hermetic. It never reads the Midea inventory, never talks to a
+          # device, and never contacts the vendor cloud. Anything that needed a
+          # credential would not belong in CI.

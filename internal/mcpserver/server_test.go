@@ -30,8 +30,8 @@ func TestMCPServerExposesToolsOverMemoryTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 7 {
-		t.Fatalf("tool count = %d, want 7", len(tools.Tools))
+	if len(tools.Tools) != 8 {
+		t.Fatalf("tool count = %d, want 8", len(tools.Tools))
 	}
 	result, err := clientSession.CallTool(ctx, &sdkmcp.CallToolParams{Name: "list_devices"})
 	if err != nil {
