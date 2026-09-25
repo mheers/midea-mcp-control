@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
+	"midea-control/internal/bootstrap"
 	"midea-control/internal/config"
 	"midea-control/internal/discovery"
 	"midea-control/internal/mcpserver"
@@ -50,6 +54,8 @@ func run(args []string) error {
 		return runStatus(args[1:])
 	case "verify":
 		return runVerify(args[1:])
+	case "bootstrap":
+		return runBootstrap(args[1:])
 	case "on":
 		return runPower(args[1:], true)
 	case "off":
@@ -295,6 +301,88 @@ func splitArgs(args []string, allowMultipleSelectors bool) ([]string, []string, 
 	return selectors, flagArgs, nil
 }
 
+// runBootstrap performs the one-time cloud credential bootstrap. It is
+// deliberately not exposed through MCP: it needs account credentials.
+func runBootstrap(args []string) error {
+	flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	account := flags.String("account", "", "cloud account (or set MIDEA_ACCOUNT)")
+	cloudName := flags.String("cloud", "SmartHome", "cloud identity to use")
+	device := flags.String("device", "", "limit to one device name, IP or id")
+	path := flags.String("config", config.DefaultPath(), "device inventory path")
+	timeout := flags.Duration("timeout", 20*time.Second, "per-operation timeout")
+	dryRun := flags.Bool("dry-run", false, "verify everything but do not write the inventory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	resolvedAccount := *account
+	if resolvedAccount == "" {
+		resolvedAccount = os.Getenv("MIDEA_ACCOUNT")
+	}
+	if resolvedAccount == "" {
+		fmt.Fprint(os.Stderr, "Midea account: ")
+		value, err := readLine(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read account: %w", err)
+		}
+		resolvedAccount = value
+	}
+	if resolvedAccount == "" {
+		return errors.New("an account is required (--account or MIDEA_ACCOUNT)")
+	}
+
+	password, err := readPassword()
+	if err != nil {
+		return err
+	}
+
+	runner := bootstrap.New()
+	runner.ConfigPath = *path
+	runner.CloudName = *cloudName
+	runner.Account = resolvedAccount
+	runner.Password = password
+	runner.Selector = *device
+	runner.OperationTimeout = *timeout
+	runner.DryRun = *dryRun
+	runner.Out = os.Stdout
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	_, err = runner.Run(ctx)
+	return err
+}
+
+// readPassword takes the password from MIDEA_PASSWORD or a hidden prompt. It
+// never echoes the value and never writes it anywhere.
+func readPassword() (string, error) {
+	if password := os.Getenv("MIDEA_PASSWORD"); password != "" {
+		return password, nil
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprint(os.Stderr, "Midea password: ")
+		password, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", fmt.Errorf("read password: %w", err)
+		}
+		if len(password) == 0 {
+			return "", errors.New("an empty password is not accepted")
+		}
+		return string(password), nil
+	}
+	fmt.Fprintln(os.Stderr, "Midea password (set MIDEA_PASSWORD to avoid echoing):")
+	return readLine(os.Stdin)
+}
+
+func readLine(reader io.Reader) (string, error) {
+	line, err := bufio.NewReader(reader).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
 func runMCP(args []string) error {
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -335,6 +423,7 @@ Usage:
   midea-control discover   [--target IP] [--timeout DURATION] [--json]
   midea-control status     [SELECTOR ...] [--config PATH] [--json]
   midea-control verify     [--config PATH] [--json]
+  midea-control bootstrap  [--account EMAIL] [--device SELECTOR] [--dry-run]
   midea-control on         SELECTOR --confirm [--config PATH]
   midea-control off        SELECTOR --confirm [--config PATH]
   midea-control mcp        [--config PATH]
@@ -342,7 +431,8 @@ Usage:
 Selectors are exact configured names, IP addresses, or numeric device IDs.
 Flags may appear before or after selectors; use -- before a selector that
 starts with a dash. The mcp command speaks the Model Context Protocol over
-stdio; no HTTP listener is opened. Tokens and keys are read only from the
-mode-0600 inventory file and are never printed.
+stdio; no HTTP listener is opened. The bootstrap command needs account
+credentials and is never reachable through MCP. Tokens and keys are read only
+from the mode-0600 inventory file and are never printed.
 `, version.Value)
 }
