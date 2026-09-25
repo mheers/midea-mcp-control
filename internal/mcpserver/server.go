@@ -83,6 +83,24 @@ func NewMCPServer(service *Service) *sdkmcp.Server {
 		return nil, powerOutput{Result: result}, err
 	})
 
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "set_state",
+		Description: "Change temperature, mode, fan speed, swing, eco, turbo, sleep or display on a configured device. Sparse: omitted fields are left as they are. This is a physical write; confirm must be true and every requested field is verified by read-back.",
+		Annotations: powerWrite,
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input setStateInput) (*sdkmcp.CallToolResult, powerOutput, error) {
+		result, err := service.Apply(ctx, input.Device, input.patch(), input.Confirm)
+		return nil, powerOutput{Result: result}, err
+	})
+
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "get_capabilities",
+		Description: "Read a configured device's advertised feature report, including temperature limits when it reports any.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input deviceInput) (*sdkmcp.CallToolResult, capabilityOutput, error) {
+		result, err := service.Capabilities(ctx, input.Device)
+		return nil, capabilityOutput{Result: result}, err
+	})
+
 	return server
 }
 

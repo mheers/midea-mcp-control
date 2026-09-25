@@ -94,6 +94,9 @@ bin/midea-control discover --json
 # Read all configured units.
 bin/midea-control status
 
+# What each unit says it supports.
+bin/midea-control capabilities
+
 # Authenticate every unit using only the saved LAN credentials.
 bin/midea-control verify
 
@@ -101,11 +104,52 @@ bin/midea-control verify
 bin/midea-control off bedroom --confirm
 bin/midea-control on bedroom --confirm
 
+# Any combination of fields, applied in one frame and read back.
+bin/midea-control set bedroom --temp 21.5 --mode cool --fan low --confirm
+bin/midea-control set living-room --mode auto --temp 23 --confirm
+
 # One-time cloud bootstrap (prompts for the account password).
 bin/midea-control bootstrap
 ```
 
-A selector is an exact configured name, IP address, or numeric device ID. A power write seeds a full state read, changes only the logical power field, and performs an independent read-back. The legacy `0x40` set frame itself is full-state, so firmware can normalize other fields even though the adapter only requests a power change. The upstream client normally retries timed-out commands; this project sets reads to two attempts but physical writes to one, so a set command is never resent automatically. If the command is sent but read-back fails, the tool reports delivery as unknown.
+A selector is an exact configured name, IP address, or numeric device ID. Boolean
+flags accept `--eco true`, `--eco=true` and a bare `--eco` (meaning true).
+
+### What the writes actually do on this hardware
+
+Measured on all three units, not assumed:
+
+| Field | Works? | Notes |
+|---|---|---|
+| power | yes | verified by read-back |
+| mode | yes | `auto`, `cool`, `dry`, `heat`, `fan`, `smart_dry` |
+| temperature | yes | 17–30 °C in 0.5 °C steps |
+| fan speed | yes | `auto`, `silent`, `low`, `medium`, `high`, `full` |
+| eco, turbo, sleep, display, swing | **no** | accepted on the wire, refused by the units |
+
+The unsupported flags are still exposed, because they are part of the protocol
+and may work on other units or while a unit is running. On these models they do
+not take effect, and the tool says so instead of reporting a false success:
+
+```text
+error: command sent to bedroom but read-back disagrees: eco is false, requested true
+```
+
+If you want the remaining question settled — whether the boolean flags work
+while a unit is *running* — that needs a unit to be switched on, which has a
+real physical effect, so it is left for you to decide.
+
+### Write safety
+
+A write seeds the device's current state, changes only the fields you named, and
+is verified by an independent read-back. The frame carrying the command is
+transmitted **at most once**; a read-back that disagrees with the request is an
+error, not a warning. Because a unit can drop the response to a query that
+immediately follows a set frame, verification runs on a fresh connection with
+the read retry budget — this never re-sends the command.
+
+The legacy `0x40` set frame is full-state, so firmware can normalize fields you
+did not ask about; the adapter only requests the changes you specify.
 
 ## MCP over stdio
 
@@ -128,7 +172,9 @@ Available tools:
 - `verify_credentials` — read-only check that authenticates every configured unit with stored LAN credentials and returns an independent result for each unit; the CLI `verify` command records successful `last_verified` metadata;
 - `discover_devices` — read-only LAN broadcast discovery;
 - `get_status` — read one configured device;
-- `set_power` — physical on/off write; requires `confirm: true`, changes only power, and reads back the state.
+- `get_capabilities` — read a device's feature report;
+- `set_power` — physical on/off write; requires `confirm: true`, changes only power, and reads back the state;
+- `set_state` — physical write for temperature, mode, fan, swing, eco, turbo, sleep or display; sparse (omitted fields are left alone), requires `confirm: true`, and every requested field is verified by read-back.
 
 `confirm` is a guard against accidental calls, not an authorization boundary: an MCP client that is allowed to reach this local server can still set it to `true`. Keep write-capable MCP clients behind your own human-approval policy.
 

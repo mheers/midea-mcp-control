@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 	"midea-control/internal/bootstrap"
 	"midea-control/internal/config"
+	"midea-control/internal/controller"
 	"midea-control/internal/discovery"
 	"midea-control/internal/mcpserver"
 	"midea-control/internal/version"
@@ -54,6 +56,10 @@ func run(args []string) error {
 		return runStatus(args[1:])
 	case "verify":
 		return runVerify(args[1:])
+	case "set":
+		return runSet(args[1:])
+	case "capabilities":
+		return runCapabilities(args[1:])
 	case "bootstrap":
 		return runBootstrap(args[1:])
 	case "on":
@@ -155,12 +161,12 @@ func runDiscover(args []string) error {
 }
 
 func runStatus(args []string) error {
-	selectors, flagArgs, _ := splitArgs(args, true)
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	path := flags.String("config", config.DefaultPath(), "device inventory path")
 	timeout := flags.Duration("timeout", 30*time.Second, "per-device operation timeout")
 	asJSON := flags.Bool("json", false, "print JSON")
+	selectors, flagArgs, _ := splitArgs(flags, args, true)
 	if err := flags.Parse(flagArgs); err != nil {
 		return err
 	}
@@ -239,21 +245,21 @@ func runPower(args []string, power bool) error {
 	if !power {
 		name = "off"
 	}
-	selectors, flagArgs, err := splitArgs(args, false)
-	if err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	selector := ""
-	if len(selectors) == 1 {
-		selector = selectors[0]
-	}
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	path := flags.String("config", config.DefaultPath(), "device inventory path")
 	timeout := flags.Duration("timeout", 30*time.Second, "operation timeout")
 	confirm := flags.Bool("confirm", false, "required confirmation for a physical write")
+	selectors, flagArgs, err := splitArgs(flags, args, false)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
 	if err := flags.Parse(flagArgs); err != nil {
 		return err
+	}
+	selector := ""
+	if len(selectors) == 1 {
+		selector = selectors[0]
 	}
 	if !*confirm {
 		return fmt.Errorf("refusing physical write: pass -confirm")
@@ -275,8 +281,9 @@ func runPower(args []string, power bool) error {
 
 // splitArgs accepts flags before or after positional selectors. The standard
 // flag package stops at the first positional argument, so reorder the two forms
-// before parsing.
-func splitArgs(args []string, allowMultipleSelectors bool) ([]string, []string, error) {
+// before parsing. The FlagSet is consulted to learn which flags consume a
+// following value, so this works for any command.
+func splitArgs(flags *flag.FlagSet, args []string, allowMultipleSelectors bool) ([]string, []string, error) {
 	var selectors []string
 	var flagArgs []string
 	for i := 0; i < len(args); i++ {
@@ -285,9 +292,16 @@ func splitArgs(args []string, allowMultipleSelectors bool) ([]string, []string, 
 			selectors = append(selectors, args[i+1:]...)
 			break
 		}
-		if strings.HasPrefix(arg, "-") {
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			// Accept both "--flag" and "--flag true" for boolean flags: the
+			// standard flag package only understands "--flag=true".
+			if booleanValueFollows(flags, arg, args, i) {
+				flagArgs = append(flagArgs, arg+"="+args[i+1])
+				i++
+				continue
+			}
 			flagArgs = append(flagArgs, arg)
-			if (arg == "-config" || arg == "--config" || arg == "-timeout" || arg == "--timeout") && i+1 < len(args) {
+			if i+1 < len(args) && flagConsumesValue(flags, arg) {
 				flagArgs = append(flagArgs, args[i+1])
 				i++
 			}
@@ -299,6 +313,42 @@ func splitArgs(args []string, allowMultipleSelectors bool) ([]string, []string, 
 		return nil, nil, errors.New("requires exactly one device selector")
 	}
 	return selectors, flagArgs, nil
+}
+
+// flagConsumesValue reports whether a flag takes the next argument as its
+// value. Boolean flags do not.
+func flagConsumesValue(flags *flag.FlagSet, arg string) bool {
+	entry := lookupFlag(flags, arg)
+	if entry == nil {
+		return false // unknown flag: let the parser report it
+	}
+	boolean, ok := entry.Value.(interface{ IsBoolFlag() bool })
+	return !ok || !boolean.IsBoolFlag()
+}
+
+// booleanValueFollows detects the "--flag true" spelling for a boolean flag.
+func booleanValueFollows(flags *flag.FlagSet, arg string, args []string, i int) bool {
+	if i+1 >= len(args) {
+		return false
+	}
+	value := args[i+1]
+	if value != "true" && value != "false" {
+		return false
+	}
+	entry := lookupFlag(flags, arg)
+	if entry == nil {
+		return false
+	}
+	boolean, ok := entry.Value.(interface{ IsBoolFlag() bool })
+	return ok && boolean.IsBoolFlag()
+}
+
+func lookupFlag(flags *flag.FlagSet, arg string) *flag.Flag {
+	name := strings.TrimLeft(arg, "-")
+	if index := strings.Index(name, "="); index >= 0 {
+		return nil // the value is already attached
+	}
+	return flags.Lookup(name)
 }
 
 // runBootstrap performs the one-time cloud credential bootstrap. It is
@@ -383,6 +433,181 @@ func readLine(reader io.Reader) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// optionalBool is a tri-state flag: unset, explicitly true, or explicitly
+// false. It is needed because a plain bool flag cannot express "leave this
+// field alone".
+type optionalBool struct {
+	set   bool
+	value bool
+}
+
+func (o *optionalBool) String() string {
+	if !o.set {
+		return ""
+	}
+	return strconv.FormatBool(o.value)
+}
+
+func (o *optionalBool) Set(text string) error {
+	value, err := strconv.ParseBool(text)
+	if err != nil {
+		return fmt.Errorf("expected true or false, got %q", text)
+	}
+	o.set, o.value = true, value
+	return nil
+}
+
+// IsBoolFlag tells the flag package this flag does not consume a value, so
+// `--eco true` and `--eco=true` both work.
+func (o *optionalBool) IsBoolFlag() bool { return true }
+
+func (o optionalBool) pointer() *bool {
+	if !o.set {
+		return nil
+	}
+	value := o.value
+	return &value
+}
+
+// runSet applies a sparse set of state changes to one configured device.
+func runSet(args []string) error {
+	flags := flag.NewFlagSet("set", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	path := flags.String("config", config.DefaultPath(), "device inventory path")
+	timeout := flags.Duration("timeout", 30*time.Second, "operation timeout")
+	confirm := flags.Bool("confirm", false, "required confirmation for a physical write")
+	mode := flags.String("mode", "", "operating mode: "+strings.Join(controller.Modes(), ", "))
+	fan := flags.String("fan", "", "fan speed: "+strings.Join(controller.FanSpeeds(), ", "))
+	temp := flags.Float64("temp", 0, "target temperature in °C (0.5 steps)")
+	var power, swingV, swingH, eco, turbo, sleepMode, display optionalBool
+	for _, entry := range []struct {
+		name  string
+		usage string
+		value *optionalBool
+	}{
+		{"power", "turn the unit on or off", &power},
+		{"swing-v", "vertical louver swing", &swingV},
+		{"swing-h", "horizontal louver swing", &swingH},
+		{"eco", "eco mode", &eco},
+		{"turbo", "turbo mode", &turbo},
+		{"sleep", "sleep mode", &sleepMode},
+		{"display", "indoor display", &display},
+	} {
+		flags.Var(entry.value, entry.name, entry.usage+" (true/false)")
+	}
+	selectors, flagArgs, err := splitArgs(flags, args, false)
+	if err != nil {
+		return fmt.Errorf("set: %w", err)
+	}
+	if len(selectors) != 1 {
+		return errors.New("set requires exactly one device selector")
+	}
+	if err := flags.Parse(flagArgs); err != nil {
+		return err
+	}
+	if !*confirm {
+		return errors.New("refusing physical write: pass -confirm")
+	}
+
+	patch := controller.Patch{
+		Mode:     *mode,
+		FanSpeed: *fan,
+		Power:    power.pointer(),
+		SwingV:   swingV.pointer(),
+		SwingH:   swingH.pointer(),
+		Eco:      eco.pointer(),
+		Turbo:    turbo.pointer(),
+		Sleep:    sleepMode.pointer(),
+		Display:  display.pointer(),
+	}
+	if flags.Lookup("temp") != nil && isFlagPassed(flagArgs, "temp") {
+		value := *temp
+		patch.TargetTemp = &value
+	}
+	if patch.Empty() {
+		return errors.New("nothing to change: pass at least one of --power, --mode, --fan, --temp, --eco, --turbo, --sleep, --display, --swing-v, --swing-h")
+	}
+
+	service := mcpserver.NewService()
+	service.ConfigPath = *path
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	result, err := service.Apply(ctx, selectors[0], patch, true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: applied %s\n", result.Device.Name, strings.Join(patch.FieldNames(), ", "))
+	printStatus(result)
+	return nil
+}
+
+// isFlagPassed reports whether the user actually supplied a flag, so that a
+// zero value can be distinguished from "not requested".
+func isFlagPassed(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == "-"+name || arg == "--"+name ||
+			strings.HasPrefix(arg, "-"+name+"=") || strings.HasPrefix(arg, "--"+name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func runCapabilities(args []string) error {
+	flags := flag.NewFlagSet("capabilities", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	path := flags.String("config", config.DefaultPath(), "device inventory path")
+	timeout := flags.Duration("timeout", 30*time.Second, "per-device operation timeout")
+	asJSON := flags.Bool("json", false, "print JSON")
+	selectors, flagArgs, _ := splitArgs(flags, args, true)
+	if err := flags.Parse(flagArgs); err != nil {
+		return err
+	}
+
+	file, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	if len(selectors) == 0 {
+		for _, device := range file.PublicDevices() {
+			selectors = append(selectors, device.Name)
+		}
+	}
+	service := mcpserver.NewService()
+	service.ConfigPath = *path
+	results := make([]mcpserver.CapabilityResult, 0, len(selectors))
+	for _, selector := range selectors {
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		result, err := service.Capabilities(ctx, selector)
+		cancel()
+		if err != nil {
+			return err
+		}
+		results = append(results, result)
+	}
+	if *asJSON {
+		return printJSON(results)
+	}
+	for _, result := range results {
+		fmt.Printf("%s (%s): reported=%t custom_fan=%t humidity=%t swing_angle=%t temp_range=%s\n",
+			result.Device.Name, result.Device.IP, result.Capabilities.Reported,
+			result.Capabilities.CustomFanSpeed, result.Capabilities.HumidityControl,
+			result.Capabilities.SwingAngle, describeRange(result.Capabilities))
+	}
+	return nil
+}
+
+func describeRange(c controller.Capabilities) string {
+	min, max := c.MinCoolTemp, c.MaxCoolTemp
+	if min == 0 || max == 0 {
+		min, max = c.MinHeatTemp, c.MaxHeatTemp
+	}
+	if min == 0 || max == 0 {
+		return "not reported (using 17-30°C default)"
+	}
+	return fmt.Sprintf("%.1f-%.1f°C", min, max)
+}
+
 func runMCP(args []string) error {
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -422,7 +647,12 @@ Usage:
   midea-control audit      [--config PATH]
   midea-control discover   [--target IP] [--timeout DURATION] [--json]
   midea-control status     [SELECTOR ...] [--config PATH] [--json]
+  midea-control capabilities [SELECTOR ...] [--config PATH] [--json]
   midea-control verify     [--config PATH] [--json]
+  midea-control set        SELECTOR --confirm [--power BOOL] [--mode MODE]
+                           [--fan SPEED] [--temp C] [--eco BOOL] [--turbo BOOL]
+                           [--sleep BOOL] [--display BOOL]
+                           [--swing-v BOOL] [--swing-h BOOL]
   midea-control bootstrap  [--account EMAIL] [--device SELECTOR] [--dry-run]
   midea-control on         SELECTOR --confirm [--config PATH]
   midea-control off        SELECTOR --confirm [--config PATH]

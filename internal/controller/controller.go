@@ -24,6 +24,13 @@ type Client interface {
 	Update(context.Context, midea.Request) (midea.Response, error)
 }
 
+// capabilityClient is an optional extension implemented by clients that can
+// query a device's feature report. Keeping it separate means a client without
+// capability support still works, falling back to conservative limits.
+type capabilityClient interface {
+	Capabilities(context.Context) (midea.Capabilities, error)
+}
+
 // Operation selects protocol retry behavior for a client.
 type Operation bool
 
@@ -113,6 +120,11 @@ func (c *Controller) Poll(ctx context.Context, device config.Device) (State, err
 	}
 	unlock := c.lockDevice(device.ID)
 	defer unlock()
+	return c.pollLocked(ctx, device)
+}
+
+// pollLocked performs a read. The caller must already hold the device lock.
+func (c *Controller) pollLocked(ctx context.Context, device config.Device) (State, error) {
 	client, err := c.client(device, ReadOperation)
 	if err != nil {
 		return State{}, err
@@ -128,45 +140,146 @@ func (c *Controller) Poll(ctx context.Context, device config.Device) (State, err
 	return stateFromResponse(response), nil
 }
 
-// SetPower changes only the power bit and verifies the resulting state.
-//
-// The command is sent once. If the device accepts the command but the
-// independent read-back fails, the returned error explicitly says delivery is
-// unknown; callers must not blindly retry.
-func (c *Controller) SetPower(ctx context.Context, device config.Device, power bool) (State, error) {
+// Capabilities returns the device's advertised feature flags. Firmware may
+// leave fields unreported, in which case they come back as zero values.
+func (c *Controller) Capabilities(ctx context.Context, device config.Device) (Capabilities, error) {
 	if c == nil {
-		return State{}, errors.New("controller is nil")
+		return Capabilities{}, errors.New("controller is nil")
 	}
 	unlock := c.lockDevice(device.ID)
 	defer unlock()
-	client, err := c.client(device, WriteOperation)
+	return c.capabilitiesLocked(ctx, device)
+}
+
+// capabilitiesLocked queries the feature report. The caller must hold the lock.
+func (c *Controller) capabilitiesLocked(ctx context.Context, device config.Device) (Capabilities, error) {
+	client, err := c.client(device, ReadOperation)
 	if err != nil {
-		return State{}, err
+		return Capabilities{}, err
 	}
 	defer client.Close()
 	if err := client.Connect(ctx); err != nil {
+		return Capabilities{}, fmt.Errorf("connect %s: %w", device.Name, err)
+	}
+	capabilityQuery, ok := client.(capabilityClient)
+	if !ok {
+		return Capabilities{}, errors.New("client does not support capability queries")
+	}
+	capabilities, err := capabilityQuery.Capabilities(ctx)
+	if err != nil {
+		return Capabilities{}, fmt.Errorf("capabilities %s: %w", device.Name, err)
+	}
+	return fromProtocolCapabilities(capabilities), nil
+}
+
+// SetPower changes only the power bit and verifies the resulting state.
+func (c *Controller) SetPower(ctx context.Context, device config.Device, power bool) (State, error) {
+	return c.Apply(ctx, device, Patch{Power: &power})
+}
+
+// Apply sends a sparse patch, seeded with the device's current state, and
+// verifies every requested field in an independent read-back.
+//
+// The command is transmitted at most once. If the device accepts the frame but
+// the read-back does not show the requested values, the error says so
+// explicitly; callers must not blindly retry, because a physical device has no
+// exactly-once semantics here.
+func (c *Controller) Apply(ctx context.Context, device config.Device, patch Patch) (State, error) {
+	if c == nil {
+		return State{}, errors.New("controller is nil")
+	}
+	if patch.Empty() {
+		return State{}, errors.New("no fields to change")
+	}
+
+	unlock := c.lockDevice(device.ID)
+	defer unlock()
+
+	// Validate against the device's own reported limits when it publishes any.
+	// This runs on a read connection so it cannot interfere with the
+	// single-attempt write policy below.
+	if patch.TargetTemp != nil {
+		if capabilities, err := c.capabilitiesLocked(ctx, device); err == nil {
+			patch.limits = limits{
+				min: minPositive(capabilities.MinHeatTemp, capabilities.MinCoolTemp),
+				max: maxPositive(capabilities.MaxHeatTemp, capabilities.MaxCoolTemp),
+			}
+		}
+	}
+	request, want, err := patch.request(patch.limits)
+	if err != nil {
+		return State{}, err
+	}
+
+	// Write on a connection that is allowed exactly one attempt: a set frame
+	// must never be transmitted twice.
+	writeClient, err := c.client(device, WriteOperation)
+	if err != nil {
+		return State{}, err
+	}
+	if err := writeClient.Connect(ctx); err != nil {
+		_ = writeClient.Close()
 		return State{}, fmt.Errorf("connect %s: %w", device.Name, err)
 	}
-	if _, err := client.Poll(ctx); err != nil {
+	if _, err := writeClient.Poll(ctx); err != nil {
+		_ = writeClient.Close()
 		return State{}, fmt.Errorf("seed state for %s: %w", device.Name, err)
 	}
-	request := midea.Request{Power: &power}
-	commandResponse, err := client.Update(ctx, request)
-	if err != nil {
-		return State{}, fmt.Errorf("set power for %s: %w", device.Name, err)
+	commandResponse, updateErr := writeClient.Update(ctx, request)
+	closeErr := writeClient.Close()
+	if updateErr != nil {
+		return State{}, fmt.Errorf("apply %v to %s: %w", patch.FieldNames(), device.Name, updateErr)
+	}
+	if closeErr != nil {
+		return State{}, fmt.Errorf("apply %v to %s: close: %w", patch.FieldNames(), device.Name, closeErr)
 	}
 	if commandResponse.Error {
-		return State{}, fmt.Errorf("device %s reported error code %d while setting power", device.Name, commandResponse.ErrCode)
+		return State{}, fmt.Errorf(
+			"device %s reported error code %d while applying %v",
+			device.Name, commandResponse.ErrCode, patch.FieldNames())
 	}
-	response, err := client.Poll(ctx)
+
+	// Verify on a fresh read connection. A unit can drop the response to a
+	// query that immediately follows a set frame, so verification gets the
+	// read retry budget; this never re-sends the command itself.
+	state, err := c.pollLocked(ctx, device)
 	if err != nil {
-		return State{}, fmt.Errorf("power command sent to %s but read-back failed; delivery unknown: %w", device.Name, err)
+		return State{}, fmt.Errorf(
+			"command sent to %s but read-back failed; delivery unknown: %w", device.Name, err)
 	}
-	state := stateFromResponse(response)
-	if state.Power != power {
-		return state, fmt.Errorf("power command sent to %s but read-back reported power=%t, requested %t", device.Name, state.Power, power)
+	if mismatch := want.mismatch(state); mismatch != "" {
+		return state, fmt.Errorf(
+			"command sent to %s but read-back disagrees: %s", device.Name, mismatch)
 	}
 	return state, nil
+}
+
+// capabilities queries the device's feature report on a short-lived read
+// connection.
+func (c *Controller) capabilities(ctx context.Context, device config.Device) (Capabilities, error) {
+	unlock := c.lockDevice(device.ID)
+	defer unlock()
+	return c.capabilitiesLocked(ctx, device)
+}
+
+func minPositive(values ...float64) float64 {
+	result := 0.0
+	for _, value := range values {
+		if value > 0 && (result == 0 || value < result) {
+			result = value
+		}
+	}
+	return result
+}
+
+func maxPositive(values ...float64) float64 {
+	result := 0.0
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
 }
 
 func (c *Controller) lockDevice(id string) func() {
@@ -194,11 +307,11 @@ func (c *Controller) client(device config.Device, operation Operation) (Client, 
 func stateFromResponse(response midea.Response) State {
 	return State{
 		Power:              response.Power,
-		Mode:               response.Mode.String(),
+		Mode:               modeName(response.Mode),
 		TargetTemperature:  response.TargetTemp,
 		IndoorTemperature:  response.IndoorTemp,
 		OutdoorTemperature: response.OutdoorTemp,
-		FanSpeed:           response.FanSpeed.String(),
+		FanSpeed:           fanName(response.FanSpeed),
 		SwingVertical:      response.SwingV,
 		SwingHorizontal:    response.SwingH,
 		Eco:                response.Eco,

@@ -67,9 +67,11 @@ func TestSetPowerSeedsReadsAndVerifies(t *testing.T) {
 	if !state.Power || state.Mode != "heat" {
 		t.Fatalf("state = %+v, want powered heat state", state)
 	}
-	if client.connects != 1 || client.closes != 1 {
-		t.Fatalf("connect/close = %d/%d, want 1/1", client.connects, client.closes)
+	// A separate connection is used for the write and for the read-back.
+	if client.connects != 2 || client.closes != 2 {
+		t.Fatalf("connect/close = %d/%d, want 2/2", client.connects, client.closes)
 	}
+	// One seed poll before the write, one verification poll after it.
 	if client.pollIndex != 2 || len(client.updates) != 1 {
 		t.Fatalf("polls/updates = %d/%d, want 2/1", client.pollIndex, len(client.updates))
 	}

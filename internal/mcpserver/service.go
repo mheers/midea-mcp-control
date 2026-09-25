@@ -87,6 +87,49 @@ func (s *Service) SetPower(ctx context.Context, selector string, power, confirm 
 	return StatusResult{Device: device.Public(), State: state}, nil
 }
 
+// CapabilityResult pairs a device with its feature report.
+type CapabilityResult struct {
+	Device       config.PublicDevice     `json:"device"`
+	Capabilities controller.Capabilities `json:"capabilities"`
+}
+
+// Apply changes device state after an explicit confirmation. The patch is
+// sparse: unmentioned fields keep their current values.
+func (s *Service) Apply(ctx context.Context, selector string, patch controller.Patch, confirm bool) (StatusResult, error) {
+	if !confirm {
+		return StatusResult{}, errors.New("write refused: confirm must be true")
+	}
+	if patch.Empty() {
+		return StatusResult{}, errors.New("write refused: no fields to change")
+	}
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	device, err := s.find(selector)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	state, err := s.control().Apply(ctx, device, patch)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	return StatusResult{Device: device.Public(), State: state}, nil
+}
+
+// Capabilities reports what a device says it supports.
+func (s *Service) Capabilities(ctx context.Context, selector string) (CapabilityResult, error) {
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	device, err := s.find(selector)
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	capabilities, err := s.control().Capabilities(ctx, device)
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	return CapabilityResult{Device: device.Public(), Capabilities: capabilities}, nil
+}
+
 // VerifyAll authenticates every configured device using only stored LAN
 // credentials and returns an independent result for each one. It is read-only.
 func (s *Service) VerifyAll(ctx context.Context) ([]VerificationResult, error) {
@@ -212,6 +255,37 @@ type powerInput struct {
 	Confirm bool   `json:"confirm" jsonschema:"must be true; confirms this physical write"`
 }
 
+// setStateInput carries a sparse patch. Omitted fields are left unchanged.
+type setStateInput struct {
+	Device  string   `json:"device" jsonschema:"configured device name, IP address, or numeric device id"`
+	Power   *bool    `json:"power,omitempty" jsonschema:"turn the unit on or off"`
+	Mode    string   `json:"mode,omitempty" jsonschema:"operating mode: auto, cool, dry, heat, fan, smart_dry"`
+	Temp    *float64 `json:"temp_c,omitempty" jsonschema:"target temperature in °C, 0.5 steps, 17-30"`
+	Fan     string   `json:"fan,omitempty" jsonschema:"fan speed: auto, silent, low, medium, high, full"`
+	SwingV  *bool    `json:"swing_v,omitempty" jsonschema:"vertical louver swing"`
+	SwingH  *bool    `json:"swing_h,omitempty" jsonschema:"horizontal louver swing"`
+	Eco     *bool    `json:"eco,omitempty" jsonschema:"eco mode"`
+	Turbo   *bool    `json:"turbo,omitempty" jsonschema:"turbo mode"`
+	Sleep   *bool    `json:"sleep,omitempty" jsonschema:"sleep mode"`
+	Display *bool    `json:"display,omitempty" jsonschema:"indoor display"`
+	Confirm bool     `json:"confirm" jsonschema:"must be true; confirms this physical write"`
+}
+
+func (i setStateInput) patch() controller.Patch {
+	return controller.Patch{
+		Power:      i.Power,
+		Mode:       i.Mode,
+		TargetTemp: i.Temp,
+		FanSpeed:   i.Fan,
+		SwingV:     i.SwingV,
+		SwingH:     i.SwingH,
+		Eco:        i.Eco,
+		Turbo:      i.Turbo,
+		Sleep:      i.Sleep,
+		Display:    i.Display,
+	}
+}
+
 type listOutput struct {
 	Devices []config.PublicDevice `json:"devices" jsonschema:"configured Midea devices; credentials are never returned"`
 }
@@ -230,4 +304,8 @@ type verifyOutput struct {
 
 type powerOutput struct {
 	Result StatusResult `json:"result" jsonschema:"state read back after the power write"`
+}
+
+type capabilityOutput struct {
+	Result CapabilityResult `json:"result" jsonschema:"device feature report"`
 }
