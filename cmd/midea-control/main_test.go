@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"strings"
 	"testing"
 )
 
@@ -115,6 +117,97 @@ func TestSplitArgsHandlesBooleanSpellings(t *testing.T) {
 				t.Errorf("args %v produced %#v, want %#v", testCase.args, flagArgs, testCase.want)
 			}
 		}
+	}
+}
+
+// The two prompts must share one reader. A per-prompt bufio.Reader drops
+// whatever the previous one buffered, which silently loses the second line of
+// piped input.
+func TestReadLineConsumesSequentialLines(t *testing.T) {
+	original := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader("first@example.com\r\nsecond-line\nthird\n"))
+	t.Cleanup(func() { stdinReader = original })
+
+	for _, want := range []string{"first@example.com", "second-line", "third"} {
+		got, err := readLine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("readLine = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestReadLineHandlesEOFWithoutNewline(t *testing.T) {
+	original := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader("no-trailing-newline"))
+	t.Cleanup(func() { stdinReader = original })
+
+	got, err := readLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "no-trailing-newline" {
+		t.Fatalf("readLine = %q", got)
+	}
+}
+
+func TestResolveCredentialsFromStdin(t *testing.T) {
+	t.Setenv("MIDEA_ACCOUNT", "")
+	t.Setenv("MIDEA_PASSWORD", "")
+	original := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader("piped@example.com\npiped-password\n"))
+	t.Cleanup(func() { stdinReader = original })
+
+	account, password, err := resolveCredentials("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "piped@example.com" || password != "piped-password" {
+		t.Fatalf("account=%q password=%q", account, password)
+	}
+}
+
+func TestResolveCredentialsRejectsEmptyInput(t *testing.T) {
+	t.Setenv("MIDEA_ACCOUNT", "")
+	t.Setenv("MIDEA_PASSWORD", "")
+	original := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader("\n\n"))
+	t.Cleanup(func() { stdinReader = original })
+
+	if _, _, err := resolveCredentials("", true); err == nil {
+		t.Fatal("empty stdin was accepted as credentials")
+	}
+}
+
+func TestResolveCredentialsPrefersFlagAndEnvironment(t *testing.T) {
+	// The documented rule: --credentials-stdin reads only the credentials that
+	// are still missing, one per line, account first. Supplying the account
+	// elsewhere therefore means the first stdin line is the password.
+	original := stdinReader
+	t.Cleanup(func() { stdinReader = original })
+
+	t.Setenv("MIDEA_PASSWORD", "")
+	stdinReader = bufio.NewReader(strings.NewReader("piped-password\n"))
+	account, password, err := resolveCredentials("flag@example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "flag@example.com" || password != "piped-password" {
+		t.Fatalf("account=%q password=%q", account, password)
+	}
+
+	// A password in the environment wins over stdin, so a piped account can be
+	// paired with a secret held out of band.
+	t.Setenv("MIDEA_PASSWORD", "from-env")
+	stdinReader = bufio.NewReader(strings.NewReader("piped@example.com\n"))
+	account, password, err = resolveCredentials("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "piped@example.com" || password != "from-env" {
+		t.Fatalf("account=%q password=%q", account, password)
 	}
 }
 

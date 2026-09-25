@@ -58,10 +58,27 @@ bin/midea-control bootstrap --dry-run
 bin/midea-control bootstrap --device bedroom
 ```
 
-The password can also be supplied through `MIDEA_PASSWORD` for non-interactive
-use, and the account through `MIDEA_ACCOUNT` or `--account`. Neither is ever
-written to disk, and neither is reachable through MCP: `bootstrap` is a
-CLI-only command by design.
+The password can also be supplied without prompting. The precedence is
+flag, then environment, then stdin, then an interactive prompt (the password is
+read without echo on a terminal):
+
+```sh
+# Both lines on stdin: account first, then password.
+printf '%s\n%s\n' "$EMAIL" "$PASSWORD" | bin/midea-control bootstrap --credentials-stdin
+
+# Account piped, password held out of band in the environment.
+printf '%s\n' "$EMAIL" | MIDEA_PASSWORD="$PASSWORD" bin/midea-control bootstrap --credentials-stdin
+
+# Account on the command line, password piped.
+bin/midea-control bootstrap --account "$EMAIL" --credentials-stdin < password.txt
+```
+
+`--credentials-stdin` reads **only the credentials that are still missing**, one
+per line, account first. Supplying the account elsewhere therefore means the
+first line is the password. Empty input is rejected rather than treated as an
+empty password. Neither value is ever written to disk, and the password is not
+echoed. `bootstrap` is a CLI-only command by design: it is never reachable
+through MCP.
 
 Verify the resulting file permissions before use:
 

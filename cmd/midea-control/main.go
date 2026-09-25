@@ -355,6 +355,11 @@ func lookupFlag(flags *flag.FlagSet, arg string) *flag.Flag {
 	return flags.Lookup(name)
 }
 
+// stdinReader is shared by every prompt. Creating a new bufio.Reader per
+// prompt would silently drop whatever the previous one had buffered, so
+// `printf 'user\npass\n' | midea-control bootstrap` would lose the second line.
+var stdinReader = bufio.NewReader(os.Stdin)
+
 // runBootstrap performs the one-time cloud credential bootstrap. It is
 // deliberately not exposed through MCP: it needs account credentials.
 func runBootstrap(args []string) error {
@@ -366,27 +371,13 @@ func runBootstrap(args []string) error {
 	path := flags.String("config", config.DefaultPath(), "device inventory path")
 	timeout := flags.Duration("timeout", 20*time.Second, "per-operation timeout")
 	dryRun := flags.Bool("dry-run", false, "verify everything but do not write the inventory")
+	credentialsStdin := flags.Bool("credentials-stdin", false,
+		"read any still-missing credential as one line of stdin: account first, then password")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
-	resolvedAccount := *account
-	if resolvedAccount == "" {
-		resolvedAccount = os.Getenv("MIDEA_ACCOUNT")
-	}
-	if resolvedAccount == "" {
-		fmt.Fprint(os.Stderr, "Midea account: ")
-		value, err := readLine(os.Stdin)
-		if err != nil {
-			return fmt.Errorf("read account: %w", err)
-		}
-		resolvedAccount = value
-	}
-	if resolvedAccount == "" {
-		return errors.New("an account is required (--account or MIDEA_ACCOUNT)")
-	}
-
-	password, err := readPassword()
+	resolvedAccount, password, err := resolveCredentials(*account, *credentialsStdin)
 	if err != nil {
 		return err
 	}
@@ -407,7 +398,59 @@ func runBootstrap(args []string) error {
 	return err
 }
 
-// readPassword takes the password from MIDEA_PASSWORD or a hidden prompt. It
+// resolveCredentials obtains the account and password, in order of precedence:
+// explicit flag, then environment, then stdin, then an interactive prompt.
+//
+// Neither value is ever written anywhere.
+func resolveCredentials(flagAccount string, fromStdin bool) (account, password string, err error) {
+	account = flagAccount
+	if account == "" {
+		account = os.Getenv("MIDEA_ACCOUNT")
+	}
+	password = os.Getenv("MIDEA_PASSWORD")
+
+	if fromStdin {
+		// Explicit non-interactive form: exactly two lines, account first.
+		// A password in the environment still wins, so a piped account can be
+		// combined with a secret supplied out of band.
+		if account == "" {
+			account, err = readLine()
+			if err != nil {
+				return "", "", fmt.Errorf("read account from stdin: %w", err)
+			}
+		}
+		if password == "" {
+			password, err = readLine()
+			if err != nil {
+				return "", "", fmt.Errorf("read password from stdin: %w", err)
+			}
+		}
+	} else {
+		if account == "" {
+			fmt.Fprint(os.Stderr, "Midea account: ")
+			account, err = readLine()
+			if err != nil {
+				return "", "", fmt.Errorf("read account: %w", err)
+			}
+		}
+		if password == "" {
+			password, err = readPassword()
+			if err != nil {
+				return "", "", err
+			}
+		}
+	}
+
+	if account == "" {
+		return "", "", errors.New("an account is required (--account, MIDEA_ACCOUNT, or the first line of stdin)")
+	}
+	if password == "" {
+		return "", "", errors.New("a password is required (MIDEA_PASSWORD, or the second line of stdin)")
+	}
+	return account, password, nil
+}
+
+// readPassword takes the password from the environment or a hidden prompt. It
 // never echoes the value and never writes it anywhere.
 func readPassword() (string, error) {
 	if password := os.Getenv("MIDEA_PASSWORD"); password != "" {
@@ -426,11 +469,13 @@ func readPassword() (string, error) {
 		return string(password), nil
 	}
 	fmt.Fprintln(os.Stderr, "Midea password (set MIDEA_PASSWORD to avoid echoing):")
-	return readLine(os.Stdin)
+	return readLine()
 }
 
-func readLine(reader io.Reader) (string, error) {
-	line, err := bufio.NewReader(reader).ReadString('\n')
+// readLine reads one line from the shared stdin reader. A trailing carriage
+// return is trimmed so CRLF input works.
+func readLine() (string, error) {
+	line, err := stdinReader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
