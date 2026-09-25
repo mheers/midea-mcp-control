@@ -36,6 +36,16 @@ func (f *fakeClient) Update(_ context.Context, request midea.Request) (midea.Res
 	return f.polls[len(f.polls)-1], nil
 }
 
+// Capabilities and Energy make the fake satisfy the controller's optional
+// extension interfaces, so those code paths are exercised rather than skipped.
+func (f *fakeClient) Capabilities(context.Context) (midea.Capabilities, error) {
+	return midea.Capabilities{}, nil
+}
+
+func (f *fakeClient) Energy(context.Context) (midea.Energy, error) {
+	return midea.Energy{TotalKWh: 6.9}, nil
+}
+
 func testService(t *testing.T, client controller.Client) *Service {
 	t.Helper()
 	device := config.Device{

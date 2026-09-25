@@ -39,9 +39,22 @@ var discoveryAESKey = []byte{
 
 // Options controls a discovery scan.
 type Options struct {
-	Target  string
+	// Target is an optional private IPv4 address to probe directly. Empty
+	// means broadcast to every private interface on the host.
+	Target string
+	// Timeout bounds how long the scan listens for replies.
 	Timeout time.Duration
+	// Packets is how many requests are sent per port.
 	Packets int
+	// Ports are the UDP discovery ports. Empty uses the Midea defaults.
+	Ports []int
+}
+
+func (o Options) ports() []int {
+	if len(o.Ports) == 0 {
+		return []int{6445, 20086}
+	}
+	return o.Ports
 }
 
 // Device is the non-secret information returned by a LAN discovery.
@@ -78,19 +91,14 @@ func Discover(ctx context.Context, options Options) ([]Device, error) {
 		return nil, err
 	}
 	for _, target := range targets {
-		addr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(target, "6445"))
-		if err != nil {
-			return nil, fmt.Errorf("resolve discovery target %s: %w", target, err)
-		}
-		if err := sendPackets(conn, addr, options.Packets); err != nil {
-			return nil, err
-		}
-		addr, err = net.ResolveUDPAddr("udp4", net.JoinHostPort(target, "20086"))
-		if err != nil {
-			return nil, fmt.Errorf("resolve discovery target %s: %w", target, err)
-		}
-		if err := sendPackets(conn, addr, options.Packets); err != nil {
-			return nil, err
+		for _, port := range options.ports() {
+			addr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(target, strconv.Itoa(port)))
+			if err != nil {
+				return nil, fmt.Errorf("resolve discovery target %s: %w", target, err)
+			}
+			if err := sendPackets(conn, addr, options.Packets); err != nil {
+				return nil, err
+			}
 		}
 	}
 

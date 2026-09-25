@@ -569,7 +569,7 @@ func runSet(args []string) error {
 		Sleep:    sleepMode.pointer(),
 		Display:  display.pointer(),
 	}
-	if flags.Lookup("temp") != nil && isFlagPassed(flagArgs, "temp") {
+	if isFlagPassed(flags, flagArgs, "temp") {
 		value := *temp
 		patch.TargetTemp = &value
 	}
@@ -592,11 +592,31 @@ func runSet(args []string) error {
 
 // isFlagPassed reports whether the user actually supplied a flag, so that a
 // zero value can be distinguished from "not requested".
-func isFlagPassed(args []string, name string) bool {
-	for _, arg := range args {
-		if arg == "-"+name || arg == "--"+name ||
-			strings.HasPrefix(arg, "-"+name+"=") || strings.HasPrefix(arg, "--"+name+"=") {
+//
+// It walks the arguments the same way splitArgs does, skipping the value of any
+// flag that consumes one, so a value that happens to look like a flag is not
+// mistaken for that flag being present.
+func isFlagPassed(flags *flag.FlagSet, args []string, name string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") || len(arg) < 2 {
+			continue
+		}
+		bare := strings.TrimLeft(arg, "-")
+		if index := strings.Index(bare, "="); index >= 0 {
+			if bare[:index] == name {
+				return true
+			}
+			continue
+		}
+		if bare == name {
 			return true
+		}
+		if flagConsumesValue(flags, arg) && i+1 < len(args) {
+			i++
 		}
 	}
 	return false

@@ -19,6 +19,7 @@ type fakeClient struct {
 	closes     int
 	updates    []midea.Request
 	connectErr error
+	pollErr    error
 }
 
 func (f *fakeClient) Connect(context.Context) error {
@@ -32,12 +33,33 @@ func (f *fakeClient) Close() error {
 }
 
 func (f *fakeClient) Poll(context.Context) (midea.Response, error) {
+	if f.pollErr != nil {
+		return midea.Response{}, f.pollErr
+	}
 	if f.pollIndex >= len(f.polls) {
 		return midea.Response{}, errors.New("no fake poll response")
 	}
 	response := f.polls[f.pollIndex]
 	f.pollIndex++
 	return response, nil
+}
+
+// extendedClient adds the optional capability and energy queries so the
+// optional-extension paths can be exercised.
+type extendedClient struct {
+	fakeClient
+	caps      midea.Capabilities
+	capsErr   error
+	energy    midea.Energy
+	energyErr error
+}
+
+func (f *extendedClient) Capabilities(context.Context) (midea.Capabilities, error) {
+	return f.caps, f.capsErr
+}
+
+func (f *extendedClient) Energy(context.Context) (midea.Energy, error) {
+	return f.energy, f.energyErr
 }
 
 func (f *fakeClient) Update(_ context.Context, request midea.Request) (midea.Response, error) {
