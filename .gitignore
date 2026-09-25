@@ -1,0 +1,11 @@
+# Local credentials and generated files
+/devices.json
+*.tmp
+
+# Python bootstrap cache
+__pycache__/
+*.py[cod]
+
+# Go build output
+/bin/
+/midea-control
