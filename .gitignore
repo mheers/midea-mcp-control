@@ -1,17 +1,29 @@
-# Local credentials and generated files
-/devices.json
-*.tmp
-
-# Python bootstrap cache
-__pycache__/
-*.py[cod]
-
-# Go build output
+# Build output
 /bin/
 /midea-control
 
-# Dagger engine state
+# Local credentials and device inventory — these must never be committed.
+# The canonical location is ~/.config/midea-control/, outside the repository,
+# but guard against someone using a local override path.
+devices.json
+*.devices.json
+mcp-token
+credentials.json
+*.env
+.env
+.env.*
+
+# Dagger
 .dagger/.env
 
-# local tool caches
-.ruff_cache/
+# Go
+*.test
+*.out
+coverage.*
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

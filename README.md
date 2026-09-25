@@ -1,31 +1,49 @@
 # midea-control
 
-Local-first, pure-Go tooling for the three Midea Wi-Fi air conditioners on this LAN.
+Local-first, pure-Go tooling for Midea Wi-Fi air conditioners on your own LAN.
 
 The repository contains:
 
 - a native Go V3 LAN adapter wrapped behind `internal/controller`;
 - a native Go client for the Midea SmartHome cloud credential bootstrap;
 - credential-safe configuration and LAN discovery;
-- a CLI with read, discovery, verification, and explicitly confirmed power commands;
-- an MCP server over stdio using the official Go SDK.
+- a CLI with read, discovery, verification, and explicitly confirmed writes;
+- an MCP server over stdio or authenticated HTTP, using the official Go SDK.
 
 Everything is standard-library Go plus pinned pure-Go modules: **no Python, no
 `exec`/subprocesses, and no cgo**. It builds with `CGO_ENABLED=0`.
 
-The online research and library comparison is in `docs/research/midea-control-research.md`.
+The library research and protocol notes behind these choices are in
+`docs/research/midea-control-research.md`.
 
-## Current inventory
+## Scope
 
-The three units were discovered on the local subnet and authenticated with their stored LAN credentials:
+Built and validated against Midea protocol **V3** air conditioners
+(`00000Q18` and `00000Q1F` units). It discovers appliances on the local subnet,
+obtains their long-lived LAN credentials once, then reads and controls them
+without the cloud.
 
-| Cloud name | IP | Model | Protocol |
-|---|---|---|---|
-| living-room | `192.0.2.153` | `00000Q1F` | V3 |
-| bedroom (bedroom) | `192.0.2.131` | `00000Q18` | V3 |
-| kids-room | `192.0.2.130` | `00000Q18` | V3 |
+What the write path can change, as measured on real hardware:
 
-The inventory is stored outside the repository at `~/.config/midea-control/devices.json` with mode `0600`. Tokens and keys are never printed by the CLI or MCP tools.
+| Field | Works | Notes |
+|---|---|---|
+| power | yes | verified by read-back |
+| mode | yes | `auto`, `cool`, `dry`, `heat`, `fan`, `smart_dry` |
+| temperature | yes | 17–30 °C in 0.5 °C steps |
+| fan speed | yes | `auto`, `silent`, `low`, `medium`, `high`, `full` |
+| swing | while running | ignored by a powered-off unit |
+| sleep | transient | accepted, then cleared by the unit |
+| eco, turbo, display | no | accepted on the wire, refused by the hardware |
+
+Unsupported fields stay exposed and report the disagreement rather than
+reporting a false success. See
+[what the writes actually do](#what-the-writes-actually-do-on-this-hardware).
+
+The device inventory — including tokens and keys — is stored **outside the
+repository** at `~/.config/midea-control/devices.json` with mode `0600`. No
+credential, device identifier, MAC address, or LAN address from a real
+deployment appears anywhere in this repository; examples use documentation
+ranges from RFC 5737.
 
 ## Requirements
 
@@ -190,7 +208,7 @@ The default MCP command opens no network listener. Configure an MCP client with 
   "mcpServers": {
     "midea": {
       "command": "/absolute/path/to/midea-control/bin/midea-control",
-      "args": ["mcp", "--config", "/home/marcel/.config/midea-control/devices.json"]
+      "args": ["mcp", "--config", "/home/you/.config/midea-control/devices.json"]
     }
   }
 }

@@ -199,7 +199,7 @@ func TestValidateRejectsDuplicateIDs(t *testing.T) {
 
 func TestFindMatchesCaseInsensitively(t *testing.T) {
 	file := File{Format: 1, Devices: []Device{testDevice()}}
-	for _, selector := range []string{"bedroom", "SCHLAFZIMMER", "  bedroom  "} {
+	for _, selector := range []string{"bedroom", "BEDROOM", "  bedroom  "} {
 		if _, err := file.Find(selector); err != nil {
 			t.Errorf("Find(%q) failed: %v", selector, err)
 		}

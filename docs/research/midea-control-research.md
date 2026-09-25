@@ -80,15 +80,19 @@ For a private LAN deployment, the evidence supports **local-first control using 
 
 ## Subsequent local validation
 
-After the survey, the three units on the user's LAN were discovered and their SmartHome cloud inventory was mapped. All three speak LAN protocol V3 and authenticated successfully with separately obtained per-device token/key pairs:
+After the survey, three V3 units on the deployment LAN were discovered and their
+SmartHome cloud inventory was mapped. They authenticated successfully with
+separately obtained per-device token/key pairs. Addresses below are from the
+RFC 5737 documentation range; no real address, device id, or serial appears in
+this repository.
 
-| Cloud name | IP | Model | LAN protocol | Stored credential verified |
+| Room (anonymised) | Address | Model | LAN protocol | Credential verified |
 |---|---|---|---|---|
-| living-room | `192.0.2.153` | `00000Q1F` | V3 | yes |
+| living room | `192.0.2.153` | `00000Q1F` | V3 | yes |
 | bedroom | `192.0.2.131` | `00000Q18` | V3 | yes |
-| kids-room | `192.0.2.130` | `00000Q18` | V3 | yes |
+| children's room | `192.0.2.130` | `00000Q18` | V3 | yes |
 
-The bedroom unit was powered on and read back through an independent implementation, then powered off on request and read back again. The account password was not retained; the device token/key pairs are stored only in a mode-`0600` user configuration file. The token bootstrap response exposed no expiry field. That supports treating the pairs as long-lived device credentials, but not promising that re-pairing, factory reset, module replacement, or cloud-side revocation can never invalidate them.
+One unit was powered on and read back through an independent implementation, then powered off on request and read back again. The account password was not retained; the device token/key pairs are stored only in a mode-`0600` user configuration file. The token bootstrap response exposed no expiry field. That supports treating the pairs as long-lived device credentials, but not promising that re-pairing, factory reset, module replacement, or cloud-side revocation can never invalidate them.
 
 Measured during the Go port: the cloud returns a **different token and key on every `getToken` call** (three consecutive fetches minutes apart produced three distinct pairs per unit), yet a previously issued pair **still authenticated all three units** after a newer pair had been fetched and stored. The working model is therefore "the cloud mints a fresh pair per request and the device accepts the pairs it has been issued", not "one stable secret". Re-bootstrapping is therefore safe for other consumers holding an older pair, but it does rewrite the stored value.
 

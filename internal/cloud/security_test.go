@@ -58,6 +58,8 @@ func TestSign(t *testing.T) {
 }
 
 func TestUDPID(t *testing.T) {
+	// A synthetic appliance id, so no real device identifier appears in the
+	// repository. The expected values come from the reference implementation.
 	const applianceID = 100000000000001
 	cases := []struct {
 		method UDPPIDMethod
