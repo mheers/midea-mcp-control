@@ -45,7 +45,7 @@ Every change needs a test at the seam it affects. The existing seams are:
 | LAN discovery, including a real socket | `internal/discovery` |
 | orchestration and credential bootstrap | `internal/bootstrap` |
 | MCP tools, HTTP auth, rebinding defence | `internal/mcpserver` |
-| argument and credential handling | `cmd/midea-control` |
+| argument and credential handling | `cmd/midea-mcp-control` |
 
 Tests must not talk to a real appliance, the real cloud, or a real network.
 Fakes are used at every such boundary, including a loopback UDP responder for

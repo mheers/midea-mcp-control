@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"midea-control/internal/config"
-	"midea-control/internal/controller"
-	"midea-control/internal/discovery"
+	"github.com/mheers/midea-mcp-control/internal/config"
+	"github.com/mheers/midea-mcp-control/internal/controller"
+	"github.com/mheers/midea-mcp-control/internal/discovery"
 )
 
 const defaultOperationTimeout = 30 * time.Second

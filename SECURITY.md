@@ -2,17 +2,17 @@
 
 ## What this tool holds
 
-`midea-control` reads a V3 LAN token and key for each configured appliance.
+`midea-mcp-control` reads a V3 LAN token and key for each configured appliance.
 Those are long-lived device credentials: anyone holding one can read and change
 that unit's settings from the LAN. Treat the inventory file as a secret.
 
-The file lives at `~/.config/midea-control/devices.json` with mode `0600`, and
+The file lives at `~/.config/midea-mcp-control/devices.json` with mode `0600`, and
 the loader refuses to read it if the permissions are broader, if it is a
 symlink, or if it cannot be parsed. The CLI and MCP tools never print a token
 or key, and no credential is committed to this repository.
 
 The HTTP transport additionally stores a bearer token at
-`~/.config/midea-control/mcp-token` with mode `0600`.
+`~/.config/midea-mcp-control/mcp-token` with mode `0600`.
 
 ## Defaults that matter
 

@@ -7,8 +7,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"midea-control/internal/discovery"
-	"midea-control/internal/version"
+	"github.com/mheers/midea-mcp-control/internal/discovery"
+	"github.com/mheers/midea-mcp-control/internal/version"
 )
 
 // NewMCPServer builds the stdio MCP server for a service.
@@ -23,7 +23,7 @@ func NewMCPServer(service *Service) *sdkmcp.Server {
 	}
 
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{
-		Name:        "midea-control",
+		Name:        "midea-mcp-control",
 		Version:     version.Value,
 		Description: "Credential-free status and explicitly confirmed power control for locally configured Midea air conditioners.",
 	}, nil)

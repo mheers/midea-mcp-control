@@ -1,4 +1,4 @@
-// Command midea-control controls locally configured Midea air conditioners.
+// Command midea-mcp-control controls locally configured Midea air conditioners.
 package main
 
 import (
@@ -21,12 +21,12 @@ import (
 
 	"golang.org/x/term"
 
-	"midea-control/internal/bootstrap"
-	"midea-control/internal/config"
-	"midea-control/internal/controller"
-	"midea-control/internal/discovery"
-	"midea-control/internal/mcpserver"
-	"midea-control/internal/version"
+	"github.com/mheers/midea-mcp-control/internal/bootstrap"
+	"github.com/mheers/midea-mcp-control/internal/config"
+	"github.com/mheers/midea-mcp-control/internal/controller"
+	"github.com/mheers/midea-mcp-control/internal/discovery"
+	"github.com/mheers/midea-mcp-control/internal/mcpserver"
+	"github.com/mheers/midea-mcp-control/internal/version"
 )
 
 func main() {
@@ -357,7 +357,7 @@ func lookupFlag(flags *flag.FlagSet, arg string) *flag.Flag {
 
 // stdinReader is shared by every prompt. Creating a new bufio.Reader per
 // prompt would silently drop whatever the previous one had buffered, so
-// `printf 'user\npass\n' | midea-control bootstrap` would lose the second line.
+// `printf 'user\npass\n' | midea-mcp-control bootstrap` would lose the second line.
 var stdinReader = bufio.NewReader(os.Stdin)
 
 // runBootstrap performs the one-time cloud credential bootstrap. It is
@@ -787,7 +787,7 @@ func runMCP(args []string) error {
 		return service.Run(ctx)
 	}
 
-	token, tokenFile, err := mcpserver.LoadOrCreateToken(os.Getenv("MIDEA_CONTROL_MCP_TOKEN"), *httpTokenFile)
+	token, tokenFile, err := mcpserver.LoadOrCreateToken(os.Getenv("MIDEA_MCP_CONTROL_TOKEN"), *httpTokenFile)
 	if err != nil {
 		return err
 	}
@@ -809,7 +809,7 @@ func runMCP(args []string) error {
 		fmt.Fprintf(os.Stderr, "mcp http listening on %s (bearer token in %s, mode 0600)\n",
 			listener.Addr(), tokenFile)
 	} else {
-		fmt.Fprintf(os.Stderr, "mcp http listening on %s (bearer token from MIDEA_CONTROL_MCP_TOKEN)\n",
+		fmt.Fprintf(os.Stderr, "mcp http listening on %s (bearer token from MIDEA_MCP_CONTROL_TOKEN)\n",
 			listener.Addr())
 	}
 	httpServer := &http.Server{
@@ -840,23 +840,23 @@ func printJSON(value any) error {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprintf(out, `midea-control %s
+	fmt.Fprintf(out, `midea-mcp-control %s
 
 Usage:
-  midea-control list       [--config PATH] [--json]
-  midea-control audit      [--config PATH]
-  midea-control discover   [--target IP] [--timeout DURATION] [--json]
-  midea-control status     [SELECTOR ...] [--config PATH] [--json]
-  midea-control capabilities [SELECTOR ...] [--config PATH] [--json]
-  midea-control verify     [--config PATH] [--json]
-  midea-control set        SELECTOR --confirm [--power BOOL] [--mode MODE]
+  midea-mcp-control list       [--config PATH] [--json]
+  midea-mcp-control audit      [--config PATH]
+  midea-mcp-control discover   [--target IP] [--timeout DURATION] [--json]
+  midea-mcp-control status     [SELECTOR ...] [--config PATH] [--json]
+  midea-mcp-control capabilities [SELECTOR ...] [--config PATH] [--json]
+  midea-mcp-control verify     [--config PATH] [--json]
+  midea-mcp-control set        SELECTOR --confirm [--power BOOL] [--mode MODE]
                            [--fan SPEED] [--temp C] [--eco BOOL] [--turbo BOOL]
                            [--sleep BOOL] [--display BOOL]
                            [--swing-v BOOL] [--swing-h BOOL]
-  midea-control bootstrap  [--account EMAIL] [--device SELECTOR] [--dry-run]
-  midea-control on         SELECTOR --confirm [--config PATH]
-  midea-control off        SELECTOR --confirm [--config PATH]
-  midea-control mcp        [--config PATH]
+  midea-mcp-control bootstrap  [--account EMAIL] [--device SELECTOR] [--dry-run]
+  midea-mcp-control on         SELECTOR --confirm [--config PATH]
+  midea-mcp-control off        SELECTOR --confirm [--config PATH]
+  midea-mcp-control mcp        [--config PATH]
 
 Selectors are exact configured names, IP addresses, or numeric device IDs.
 Flags may appear before or after selectors; use -- before a selector that

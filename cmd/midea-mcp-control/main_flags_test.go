@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"midea-control/internal/controller"
+	"github.com/mheers/midea-mcp-control/internal/controller"
 )
 
 func TestIsFlagPassed(t *testing.T) {

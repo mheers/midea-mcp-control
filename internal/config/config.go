@@ -60,14 +60,14 @@ type PublicDevice struct {
 
 // DefaultPath returns the user-local inventory path.
 func DefaultPath() string {
-	if path := os.Getenv("MIDEA_CONTROL_CONFIG"); path != "" {
+	if path := os.Getenv("MIDEA_MCP_CONTROL_CONFIG"); path != "" {
 		return path
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return filepath.Join(".config", "midea-control", "devices.json")
+		return filepath.Join(".config", "midea-mcp-control", "devices.json")
 	}
-	return filepath.Join(dir, "midea-control", "devices.json")
+	return filepath.Join(dir, "midea-mcp-control", "devices.json")
 }
 
 // Load reads and validates an inventory file.

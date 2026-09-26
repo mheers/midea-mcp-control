@@ -1,4 +1,4 @@
-module midea-control
+module github.com/mheers/midea-mcp-control
 
 go 1.26.0
 

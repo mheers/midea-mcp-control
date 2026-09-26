@@ -103,7 +103,7 @@ func (h *HTTPServer) Handler() http.Handler {
 func (h *HTTPServer) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !h.authorized(request) {
-			writer.Header().Set("WWW-Authenticate", `Bearer realm="midea-control"`)
+			writer.Header().Set("WWW-Authenticate", `Bearer realm="midea-mcp-control"`)
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -188,7 +188,7 @@ func LoadOrCreateToken(envValue, tokenFile string) (token string, path string, e
 		if dirErr != nil {
 			return "", "", fmt.Errorf("locate config dir: %w", dirErr)
 		}
-		tokenFile = filepath.Join(dir, "midea-control", "mcp-token")
+		tokenFile = filepath.Join(dir, "midea-mcp-control", "mcp-token")
 	}
 	if existing, readErr := os.ReadFile(tokenFile); readErr == nil {
 		value := strings.TrimSpace(string(existing))

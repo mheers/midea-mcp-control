@@ -1,4 +1,4 @@
-# midea-control
+# midea-mcp-control
 
 Local-first, pure-Go tooling for Midea Wi-Fi air conditioners on your own LAN.
 
@@ -14,7 +14,7 @@ Everything is standard-library Go plus pinned pure-Go modules: **no Python, no
 `exec`/subprocesses, and no cgo**. It builds with `CGO_ENABLED=0`.
 
 The library research and protocol notes behind these choices are in
-`docs/research/midea-control-research.md`.
+`docs/research/midea-mcp-control-research.md`.
 
 ## Status and caveats
 
@@ -58,7 +58,7 @@ reporting a false success. See
 [what the writes actually do](#what-the-writes-actually-do-on-this-hardware).
 
 The device inventory — including tokens and keys — is stored **outside the
-repository** at `~/.config/midea-control/devices.json` with mode `0600`. No
+repository** at `~/.config/midea-mcp-control/devices.json` with mode `0600`. No
 credential, device identifier, MAC address, or LAN address from a real
 deployment appears anywhere in this repository; examples use documentation
 ranges from RFC 5737.
@@ -68,30 +68,30 @@ ranges from RFC 5737.
 - Go `1.26` or newer. The Go toolchain can download the required toolchain automatically when `GOTOOLCHAIN=auto` is enabled.
 - Nothing else. No Python, no external tools, no cgo.
 
-The native protocol dependency is pinned to the immutable pseudo-version in `go.mod`. It is an MIT-licensed, V3-focused implementation that was tested for discovery, authentication, status reads, and power writes against all three units here, but it is still a hardware-oriented community implementation. The library's own scope is narrower than a general Midea library, so mode/fan/temperature decoding beyond the fields exercised here should be treated as unvalidated. The controller interface is deliberately small so it can be replaced if a better Go implementation appears.
+The native protocol dependency is pinned to the immutable pseudo-version in `go.mod`. It is an MIT-licensed, V3-focused implementation, tested for discovery, authentication, status reads and writes against the units this was developed on, but it is still a hardware-oriented community implementation. The library's own scope is narrower than a general Midea library, so mode/fan/temperature decoding beyond the fields exercised here should be treated as unvalidated. The controller interface is deliberately small so it can be replaced if a better Go implementation appears.
 
 ## One-time bootstrap
 
 The Midea account is needed only to fetch each device's long-lived LAN token/key. It is not needed for normal local operation.
 
 ```sh
-bin/midea-control bootstrap
+bin/midea-mcp-control bootstrap
 ```
 
 The command prompts for the SmartHome account and password (the password is read
 without echo), discovers the units, asks the cloud for a token/key per device,
 **verifies each credential against the unit over the LAN**, and only then writes
-`~/.config/midea-control/devices.json` with mode `0600`. A unit whose cloud
+`~/.config/midea-mcp-control/devices.json` with mode `0600`. A unit whose cloud
 token does not authenticate is reported and skipped; the others are still
 saved. An existing inventory is merged, never replaced blindly, and a file it
 cannot parse is left untouched rather than overwritten.
 
 ```sh
 # Check the cloud handshake without writing anything.
-bin/midea-control bootstrap --dry-run
+bin/midea-mcp-control bootstrap --dry-run
 
 # Re-bootstrap a single re-paired unit.
-bin/midea-control bootstrap --device bedroom
+bin/midea-mcp-control bootstrap --device bedroom
 ```
 
 The password can also be supplied without prompting. The precedence is
@@ -100,13 +100,13 @@ read without echo on a terminal):
 
 ```sh
 # Both lines on stdin: account first, then password.
-printf '%s\n%s\n' "$EMAIL" "$PASSWORD" | bin/midea-control bootstrap --credentials-stdin
+printf '%s\n%s\n' "$EMAIL" "$PASSWORD" | bin/midea-mcp-control bootstrap --credentials-stdin
 
 # Account piped, password held out of band in the environment.
-printf '%s\n' "$EMAIL" | MIDEA_PASSWORD="$PASSWORD" bin/midea-control bootstrap --credentials-stdin
+printf '%s\n' "$EMAIL" | MIDEA_PASSWORD="$PASSWORD" bin/midea-mcp-control bootstrap --credentials-stdin
 
 # Account on the command line, password piped.
-bin/midea-control bootstrap --account "$EMAIL" --credentials-stdin < password.txt
+bin/midea-mcp-control bootstrap --account "$EMAIL" --credentials-stdin < password.txt
 ```
 
 `--credentials-stdin` reads **only the credentials that are still missing**, one
@@ -119,54 +119,60 @@ through MCP.
 Verify the resulting file permissions before use:
 
 ```sh
-stat -c '%a %n' ~/.config/midea-control/devices.json
-bin/midea-control audit
+stat -c '%a %n' ~/.config/midea-mcp-control/devices.json
+bin/midea-mcp-control audit
 ```
 
 ## Build
 
 ```sh
-GOTOOLCHAIN=auto go build -o bin/midea-control ./cmd/midea-control
+GOTOOLCHAIN=auto go build -o bin/midea-mcp-control ./cmd/midea-mcp-control
 ```
 
-The default configuration path can be overridden with `MIDEA_CONTROL_CONFIG` or the `--config` flag.
+Or install it on your `PATH`:
+
+```sh
+GOTOOLCHAIN=auto go install github.com/mheers/midea-mcp-control/cmd/midea-mcp-control@latest
+```
+
+The default configuration path can be overridden with `MIDEA_MCP_CONTROL_CONFIG` or the `--config` flag.
 
 ## CLI
 
 ```sh
 # Configured devices; no credentials are displayed.
-bin/midea-control list
+bin/midea-mcp-control list
 
 # Credential metadata and file permissions, without token/key values.
-bin/midea-control audit
+bin/midea-mcp-control audit
 
 # Credential-free UDP discovery.
 # The native Go discovery was run on this LAN and found all three units.
-bin/midea-control discover --json
+bin/midea-mcp-control discover --json
 
 # Read all configured units.
-bin/midea-control status
+bin/midea-mcp-control status
 
 # What each unit says it supports.
-bin/midea-control capabilities
+bin/midea-mcp-control capabilities
 
 # Power draw. The unit's own realtime field is always zero on this hardware,
 # so the useful number is the average derived from lifetime kWh deltas.
-bin/midea-control energy living-room --samples 4 --interval 75s
+bin/midea-mcp-control energy living-room --samples 4 --interval 75s
 
 # Authenticate every unit using only the saved LAN credentials.
-bin/midea-control verify
+bin/midea-mcp-control verify
 
 # Physical writes require an explicit confirmation flag.
-bin/midea-control off bedroom --confirm
-bin/midea-control on bedroom --confirm
+bin/midea-mcp-control off bedroom --confirm
+bin/midea-mcp-control on bedroom --confirm
 
 # Any combination of fields, applied in one frame and read back.
-bin/midea-control set bedroom --temp 21.5 --mode cool --fan low --confirm
-bin/midea-control set living-room --mode auto --temp 23 --confirm
+bin/midea-mcp-control set bedroom --temp 21.5 --mode cool --fan low --confirm
+bin/midea-mcp-control set living-room --mode auto --temp 23 --confirm
 
 # One-time cloud bootstrap (prompts for the account password).
-bin/midea-control bootstrap
+bin/midea-mcp-control bootstrap
 ```
 
 A selector is an exact configured name, IP address, or numeric device ID. Boolean
@@ -225,8 +231,8 @@ The default MCP command opens no network listener. Configure an MCP client with 
 {
   "mcpServers": {
     "midea": {
-      "command": "/absolute/path/to/midea-control/bin/midea-control",
-      "args": ["mcp", "--config", "/home/you/.config/midea-control/devices.json"]
+      "command": "/absolute/path/to/midea-mcp-control/bin/midea-mcp-control",
+      "args": ["mcp", "--config", "/home/you/.config/midea-mcp-control/devices.json"]
     }
   }
 }
@@ -250,17 +256,17 @@ The MCP boundary does not accept raw tokens, keys, or protocol frames. Its optio
 ## MCP over HTTP
 
 ```sh
-bin/midea-control mcp --http                     # 127.0.0.1:8765
-bin/midea-control mcp --http --http-stateless    # no server-side sessions
-bin/midea-control mcp --http --http-addr 127.0.0.1:9000
+bin/midea-mcp-control mcp --http                     # 127.0.0.1:8765
+bin/midea-mcp-control mcp --http --http-stateless    # no server-side sessions
+bin/midea-mcp-control mcp --http --http-addr 127.0.0.1:9000
 ```
 
 This server can change a physical device, so the HTTP transport is locked down
 by default:
 
 - **Bearer token required.** There is no way to start it without one. The token
-  comes from `MIDEA_CONTROL_MCP_TOKEN`, or is generated once into
-  `~/.config/midea-control/mcp-token` with mode `0600`. Only the *path* is
+  comes from `MIDEA_MCP_CONTROL_TOKEN`, or is generated once into
+  `~/.config/midea-mcp-control/mcp-token` with mode `0600`. Only the *path* is
   printed, never the token.
 - **Loopback only.** Binding `0.0.0.0` or a LAN address is refused unless you
   pass `--http-allow-remote`. Authentication and DNS-rebinding protection stay on
@@ -272,7 +278,7 @@ by default:
   case-insensitively, per RFC 7235.
 
 ```sh
-curl -H "authorization: Bearer $(cat ~/.config/midea-control/mcp-token)" \
+curl -H "authorization: Bearer $(cat ~/.config/midea-mcp-control/mcp-token)" \
      -H 'content-type: application/json' \
      -H 'accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
@@ -313,16 +319,16 @@ system can promise a vendor-issued secret survives those. The practical
 protections here are:
 
 - keep the mode-`0600` inventory file backed up offline;
-- run `midea-control verify` periodically (for example, from a user-level timer) to detect invalidation; a simple hourly crontab entry is `0 * * * * /absolute/path/to/bin/midea-control verify --timeout 30s >/dev/null`;
-- rerun `midea-control bootstrap` if a unit is re-paired or a verification fails;
+- run `midea-mcp-control verify` periodically (for example, from a user-level timer) to detect invalidation; a simple hourly crontab entry is `0 * * * * /absolute/path/to/bin/midea-mcp-control verify --timeout 30s >/dev/null`;
+- rerun `midea-mcp-control bootstrap` if a unit is re-paired or a verification fails;
 - never commit the inventory or the bootstrap account credentials.
 
-`midea-control audit` deliberately reports `expiry: none reported` rather than claiming an expiry the vendor never provided.
+`midea-mcp-control audit` deliberately reports `expiry: none reported` rather than claiming an expiry the vendor never provided.
 
 ## Development
 
 ```sh
-gofmt -w cmd/midea-control/*.go internal/*/*.go
+gofmt -w cmd/midea-mcp-control/*.go internal/*/*.go
 go test ./...
 go vet ./...
 CGO_ENABLED=0 go build ./...

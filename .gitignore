@@ -1,9 +1,12 @@
-# Build output
+# Build output. Both names are ignored: `go build ./cmd/midea-mcp-control`
+# drops a binary in the working directory, and a stale one from an older
+# name may still be lying around.
 /bin/
+/midea-mcp-control
 /midea-control
 
 # Local credentials and device inventory — these must never be committed.
-# The canonical location is ~/.config/midea-control/, outside the repository,
+# The canonical location is ~/.config/midea-mcp-control/, outside the repository,
 # but guard against someone using a local override path.
 devices.json
 *.devices.json

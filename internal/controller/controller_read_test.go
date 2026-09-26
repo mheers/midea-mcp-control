@@ -10,7 +10,7 @@ import (
 
 	midea "github.com/thekondor/midea-porta-split"
 
-	"midea-control/internal/config"
+	"github.com/mheers/midea-mcp-control/internal/config"
 )
 
 func testDeviceConfig() config.Device {

@@ -10,16 +10,16 @@ import (
 )
 
 func TestDefaultPathHonoursTheEnvironment(t *testing.T) {
-	t.Setenv("MIDEA_CONTROL_CONFIG", "/tmp/custom-devices.json")
+	t.Setenv("MIDEA_MCP_CONTROL_CONFIG", "/tmp/custom-devices.json")
 	if got := DefaultPath(); got != "/tmp/custom-devices.json" {
 		t.Fatalf("DefaultPath = %q, want the environment value", got)
 	}
 }
 
 func TestDefaultPathFallsBackToUserConfigDir(t *testing.T) {
-	t.Setenv("MIDEA_CONTROL_CONFIG", "")
+	t.Setenv("MIDEA_MCP_CONTROL_CONFIG", "")
 	got := DefaultPath()
-	if !strings.Contains(got, filepath.Join("midea-control", "devices.json")) {
+	if !strings.Contains(got, filepath.Join("midea-mcp-control", "devices.json")) {
 		t.Fatalf("DefaultPath = %q, want the standard location", got)
 	}
 }

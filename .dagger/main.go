@@ -1,4 +1,4 @@
-// Package main implements the midea-control CI pipeline as a Dagger module.
+// Package main implements the midea-mcp-control CI pipeline as a Dagger module.
 //
 // The pipeline is hermetic: it builds, tests and vets the project inside a
 // pinned Go toolchain container. It never touches the user's Midea devices and
@@ -102,8 +102,8 @@ func (m *Ci) Build(source *dagger.Directory, goos string, goarch string) *dagger
 	return m.goContainer(source, "0").
 		WithEnvVariable("GOOS", goos).
 		WithEnvVariable("GOARCH", goarch).
-		WithExec([]string{"go", "build", "-trimpath", "-ldflags", "-s -w", "-o", "/out/midea-control", "./cmd/midea-control"}).
-		File("/out/midea-control")
+		WithExec([]string{"go", "build", "-trimpath", "-ldflags", "-s -w", "-o", "/out/midea-mcp-control", "./cmd/midea-mcp-control"}).
+		File("/out/midea-mcp-control")
 }
 
 // BuildAll cross-compiles every supported target and returns the binaries.
@@ -118,7 +118,7 @@ func (m *Ci) BuildAll(source *dagger.Directory) *dagger.Directory {
 	for _, target := range targets {
 		name := fmt.Sprintf("%s-%s", target.os, target.arch)
 		artifacts = artifacts.WithFile(
-			fmt.Sprintf("midea-control-%s%s", name, windowsSuffix(target.os)),
+			fmt.Sprintf("midea-mcp-control-%s%s", name, windowsSuffix(target.os)),
 			m.Build(source, target.os, target.arch),
 		)
 	}
