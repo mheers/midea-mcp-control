@@ -96,6 +96,27 @@ func (m *Ci) Constraints(ctx context.Context, source *dagger.Directory) (string,
 	return constraints.Stdout(ctx)
 }
 
+// EnginePin keeps the engine used in CI and the engine used locally in step.
+// The two are pinned in different files, and if they drift then a green local
+// run says nothing about what CI will do — which is precisely the failure this
+// check exists to make loud.
+func (m *Ci) EnginePin(ctx context.Context, source *dagger.Directory) (string, error) {
+	check := m.goContainer(source, "0").WithExec([]string{
+		"sh", "-c",
+		`set -eu
+pinned=$(sed -n 's/.*"engineVersion": *"\([^"]*\)".*/\1/p' dagger.json)
+ci=$(sed -n 's/^ *version: *\(v[^ ]*\).*/\1/p' .github/workflows/ci.yml)
+test -n "$pinned" || { echo 'dagger.json declares no engineVersion' >&2; exit 1; }
+test -n "$ci" || { echo 'ci.yml passes no version input to the action' >&2; exit 1; }
+test "$pinned" = "$ci" || {
+  echo "engine drift: dagger.json pins $pinned but ci.yml asks for $ci" >&2
+  exit 1
+}
+echo "engine pinned at $pinned in dagger.json and ci.yml"`,
+	})
+	return check.Stdout(ctx)
+}
+
 // Build cross-compiles the CLI for one target with cgo disabled and returns
 // the resulting binary.
 func (m *Ci) Build(source *dagger.Directory, goos string, goarch string) *dagger.File {
@@ -143,6 +164,7 @@ func (m *Ci) Ci(ctx context.Context) (string, error) {
 	}{
 		{"gofmt", func() error { _, err := m.Fmt(ctx, source); return err }},
 		{"pure-Go constraints", func() error { _, err := m.Constraints(ctx, source); return err }},
+		{"engine pin", func() error { _, err := m.EnginePin(ctx, source); return err }},
 		{"vet", func() error { _, err := m.Vet(source).Sync(ctx); return err }},
 		{"test", func() error { _, err := m.Test(source).Sync(ctx); return err }},
 		{"race", func() error { _, err := m.Race(source).Sync(ctx); return err }},

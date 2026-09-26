@@ -22,7 +22,9 @@ dagger call ci
 ```
 
 That runs gofmt, `go vet`, the test suite, the race detector, a four-target
-cross-compile, and the pure-Go constraint check. If you do not have Dagger
+cross-compile, the pure-Go constraint check, and a check that the Dagger engine
+pinned in `dagger.json` still matches the one the CI workflow asks for. If you
+do not have Dagger
 installed, the equivalent is:
 
 ```sh

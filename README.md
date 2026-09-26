@@ -132,8 +132,13 @@ GOTOOLCHAIN=auto go build -o bin/midea-mcp-control ./cmd/midea-mcp-control
 Or install it on your `PATH`:
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/mheers/midea-mcp-control/cmd/midea-mcp-control@latest
+CGO_ENABLED=0 GOTOOLCHAIN=auto go install github.com/mheers/midea-mcp-control/cmd/midea-mcp-control@latest
 ```
+
+`CGO_ENABLED=0` is not required — the source contains no cgo — but it produces a
+statically linked binary, which is what the pipeline builds. Without it `go
+install` links the Go standard library's optional cgo paths for `net` and
+`os/user` and you get a dynamically linked executable.
 
 The default configuration path can be overridden with `MIDEA_MCP_CONTROL_CONFIG` or the `--config` flag.
 

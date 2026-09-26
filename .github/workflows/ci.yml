@@ -28,10 +28,12 @@ jobs:
           fetch-depth: 1
 
       - name: Run the Dagger pipeline
-        uses: dagger/dagger@v0.20.8
+        # The GitHub Action lives in its own repository. The engine version
+        # comes from the `version` input; dagger.json pins the same value for
+        # local runs, and the pipeline asserts the two agree.
+        uses: dagger/dagger-for-github@v8.4.1
         with:
-          # An empty version uses the engine version pinned in dagger.json.
-          version: ""
+          version: v0.20.8
           args: call ci
           # No secrets are passed in, and none are needed: the pipeline is
           # hermetic. It never reads the Midea inventory, never talks to a
