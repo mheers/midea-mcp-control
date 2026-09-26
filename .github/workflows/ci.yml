@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # The pipeline cross-compiles from source; generated Dagger bindings
           # are rebuilt by the engine, so they do not need to be committed.
@@ -34,7 +34,10 @@ jobs:
         uses: dagger/dagger-for-github@v8.4.1
         with:
           version: v0.20.8
-          args: call ci
+          # The action already supplies the `call` verb, so this must be the
+          # function only. Passing `args: call ci` instead produces
+          # `dagger call call ci` and fails with "unknown command".
+          call: ci
           # No secrets are passed in, and none are needed: the pipeline is
           # hermetic. It never reads the Midea inventory, never talks to a
           # device, and never contacts the vendor cloud. Anything that needed a
