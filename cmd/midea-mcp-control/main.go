@@ -773,6 +773,12 @@ func runMCP(args []string) error {
 	httpTokenFile := flags.String("http-token-file", "", "file holding the bearer token (default: alongside the inventory)")
 	httpStateless := flags.Bool("http-stateless", false, "run without server-side sessions")
 	allowRemote := flags.Bool("http-allow-remote", false, "permit a non-loopback listen address")
+	allowedHosts := flags.String("http-allowed-hosts", "",
+		"comma-separated extra Host header names accepted by the HTTP transport (e.g. \"midea\"); loopback names are always accepted")
+	metricsAddr := flags.String("metrics-addr", "",
+		"optional Prometheus /metrics listen address (e.g. 0.0.0.0:9103); empty disables the exporter")
+	metricsInterval := flags.Duration("metrics-poll-interval", time.Minute,
+		"device poll interval for the metrics exporter")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -783,6 +789,31 @@ func runMCP(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Optional Prometheus exporter: read-only, no token, and deliberately
+	// reachable on loopback unless --http-allow-remote was passed (same
+	// explicit opt-in as the MCP listener).
+	var metricsServer *http.Server
+	if *metricsAddr != "" {
+		if err := mcpserver.CheckListenAddress(*metricsAddr, *allowRemote); err != nil {
+			return err
+		}
+		exporter := mcpserver.NewMetricsExporter(service, mcpserver.MetricsConfig{
+			Interval: *metricsInterval,
+		})
+		go exporter.Run(ctx)
+		metricsServer = &http.Server{
+			Addr:              *metricsAddr,
+			Handler:           exporter.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(os.Stderr, "metrics listener on %s failed: %v\n", *metricsAddr, err)
+			}
+		}()
+		fmt.Fprintf(os.Stderr, "prometheus metrics listening on %s\n", *metricsAddr)
+	}
+
 	if !*useHTTP {
 		return service.Run(ctx)
 	}
@@ -792,10 +823,11 @@ func runMCP(args []string) error {
 		return err
 	}
 	server, err := mcpserver.NewHTTPServer(service, mcpserver.HTTPConfig{
-		Addr:        *httpAddr,
-		Token:       token,
-		Stateless:   *httpStateless,
-		AllowRemote: *allowRemote,
+		Addr:         *httpAddr,
+		Token:        token,
+		Stateless:    *httpStateless,
+		AllowRemote:  *allowRemote,
+		AllowedHosts: splitCommaList(*allowedHosts),
 	})
 	if err != nil {
 		return err
@@ -816,10 +848,37 @@ func runMCP(args []string) error {
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// A canceled context (SIGINT/SIGTERM) shuts both listeners down so the
+	// process exits cleanly instead of waiting for SIGKILL.
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+		if metricsServer != nil {
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}
+	}()
 	if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// splitCommaList splits a comma-separated flag value, trimming whitespace and
+// dropping empty entries.
+func splitCommaList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func printStatus(result mcpserver.StatusResult) {
@@ -856,12 +915,18 @@ Usage:
   midea-mcp-control bootstrap  [--account EMAIL] [--device SELECTOR] [--dry-run]
   midea-mcp-control on         SELECTOR --confirm [--config PATH]
   midea-mcp-control off        SELECTOR --confirm [--config PATH]
-  midea-mcp-control mcp        [--config PATH]
+  midea-mcp-control mcp        [--config PATH] [--http] [--http-addr HOST:PORT]
+                           [--http-token-file FILE] [--http-stateless]
+                           [--http-allow-remote] [--http-allowed-hosts NAME,...]
+                           [--metrics-addr HOST:PORT] [--metrics-poll-interval DURATION]
 
 Selectors are exact configured names, IP addresses, or numeric device IDs.
 Flags may appear before or after selectors; use -- before a selector that
 starts with a dash. The mcp command speaks the Model Context Protocol over
-stdio; no HTTP listener is opened. The bootstrap command needs account
+stdio; --http switches to an authenticated Streamable HTTP listener (loopback
+unless --http-allow-remote, additional Host names via --http-allowed-hosts,
+GET /healthz unauthenticated). --metrics-addr additionally serves the
+read-only Prometheus exporter. The bootstrap command needs account
 credentials and is never reachable through MCP. Tokens and keys are read only
 from the mode-0600 inventory file and are never printed.
 `, version.Value)

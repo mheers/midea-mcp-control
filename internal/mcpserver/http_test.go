@@ -137,14 +137,89 @@ func TestHTTPBlocksDNSRebinding(t *testing.T) {
 
 func TestValidHostAndOrigin(t *testing.T) {
 	for _, host := range []string{"localhost", "127.0.0.1:8765", "[::1]:8765", "127.0.0.1"} {
-		if !validHost(host) {
+		if !validHost(host, nil) {
 			t.Errorf("validHost(%q) = false", host)
 		}
 	}
 	for _, host := range []string{"", "evil.com", "evil.com:80", "10.0.0.5:80"} {
-		if validHost(host) {
+		if validHost(host, nil) {
 			t.Errorf("validHost(%q) = true", host)
 		}
+	}
+}
+
+// A container reached under its Docker service name must be able to present
+// that name in the Host header — and only names on the allow-list may pass.
+func TestHTTPAllowsConfiguredHostsOnly(t *testing.T) {
+	config := testHTTPConfig()
+	config.AllowedHosts = []string{"midea", "midea:8765"}
+	handler := newProtectedHandler(t, config)
+
+	// The allow-list must not bypass authentication.
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/mcp", nil)
+	request.Host = "midea:8765"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated request with an allowed host returned %d, want 401", response.Code)
+	}
+
+	for _, host := range []string{"midea", "midea:8765"} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/mcp", nil)
+		request.Host = host
+		request.Header.Set("Authorization", "Bearer "+testToken)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code == http.StatusForbidden || response.Code == http.StatusUnauthorized {
+			t.Errorf("allowed host %q returned %d", host, response.Code)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/mcp", nil)
+	request.Host = "evil.example.com"
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Errorf("host %q outside the allow-list returned %d, want 403", "evil.example.com", response.Code)
+	}
+}
+
+// normalizeHosts must make "name" and "name:port" equivalent and drop
+// whitespace and empty entries.
+func TestNormalizeHosts(t *testing.T) {
+	got := normalizeHosts([]string{" midea ", "midea:8765", "", "  ", "other"})
+	want := []string{"midea", "midea", "other"}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeHosts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeHosts = %v, want %v", got, want)
+		}
+	}
+}
+
+// /healthz answers without a token and without data: it exists for container
+// healthchecks and probes, like the other showboat MCP sidecars.
+func TestHTTPHealthzIsUnauthenticatedAndDataFree(t *testing.T) {
+	handler := newProtectedHandler(t, testHTTPConfig())
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8765/healthz", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("/healthz returned %d, want 200", response.Code)
+	}
+	if body := response.Body.String(); body != "ok" {
+		t.Errorf("/healthz body = %q, want \"ok\"", body)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8765/healthz", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /healthz returned %d, want 405", response.Code)
 	}
 }
 

@@ -1,0 +1,7 @@
+.git
+.github
+.dagger
+dagger.json
+.ruff_cache
+bin
+docs

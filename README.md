@@ -264,6 +264,8 @@ The MCP boundary does not accept raw tokens, keys, or protocol frames. Its optio
 bin/midea-mcp-control mcp --http                     # 127.0.0.1:8765
 bin/midea-mcp-control mcp --http --http-stateless    # no server-side sessions
 bin/midea-mcp-control mcp --http --http-addr 127.0.0.1:9000
+bin/midea-mcp-control mcp --http --http-allow-remote \
+    --http-addr 0.0.0.0:8765 --http-allowed-hosts midea
 ```
 
 This server can change a physical device, so the HTTP transport is locked down
@@ -276,9 +278,13 @@ by default:
 - **Loopback only.** Binding `0.0.0.0` or a LAN address is refused unless you
   pass `--http-allow-remote`. Authentication and DNS-rebinding protection stay on
   even then.
-- **DNS-rebinding protection.** The `Host` header must be a loopback name and a
-  non-empty `Origin` must be a loopback origin. A hostile page that resolves to
-  `127.0.0.1` therefore cannot drive the device from a browser.
+- **DNS-rebinding protection.** The `Host` header must be a loopback name —
+  optionally extended by `--http-allowed-hosts` (comma-separated, ports
+  ignored; needed when a container is reached under its Docker service name) —
+  and a non-empty `Origin` must be a loopback origin. A hostile page that
+  resolves to `127.0.0.1` therefore cannot drive the device from a browser.
+- **`GET /healthz`** answers `ok` without authentication and without exposing
+  data, for container healthchecks and uptime probes.
 - Token comparison is constant-time and the scheme is matched
   case-insensitively, per RFC 7235.
 
@@ -292,6 +298,62 @@ curl -H "authorization: Bearer $(cat ~/.config/midea-mcp-control/mcp-token)" \
 
 If you do expose it beyond loopback, put it behind a reverse proxy that
 terminates TLS, and treat the bearer token as a device credential.
+
+## Prometheus metrics
+
+`--metrics-addr` additionally serves a read-only Prometheus exporter, in the
+same process as the MCP server so both share the controller's per-device
+serialization — an MCP write and a metrics poll never hit one unit at the same
+time:
+
+```sh
+bin/midea-mcp-control mcp --metrics-addr 127.0.0.1:9103
+```
+
+The exporter polls every configured device on `--metrics-poll-interval`
+(default 60 s) and serves the last-good readings. A failed poll only drops
+`midea_up` for that device to `0`; the previous values stay, so short outages
+do not tear holes into the history.
+
+| metric | meaning |
+|---|---|
+| `midea_up{name}` | 1 when the last poll succeeded |
+| `midea_power_on{name}` | power state |
+| `midea_mode{name,mode}` | current mode; exactly one series per device is 1 |
+| `midea_fan_speed{name,speed}` | fan speed; exactly one series per device is 1 |
+| `midea_target_temperature_celsius{name}` | target temperature |
+| `midea_indoor_temperature_celsius{name}` | room sensor |
+| `midea_outdoor_temperature_celsius{name}` | outdoor-unit-side reading |
+| `midea_humidity_percent{name}` | room humidity; `0` on models without a sensor |
+| `midea_error{name}`, `midea_error_code{name}` | fault state |
+| `midea_total_energy_kwh{name}` | lifetime consumption (monotonic while running) |
+| `midea_current_run_energy_kwh{name}` | consumption of the current run |
+
+The realtime power field is zero on the hardware validated here (see
+[Scope](#scope)), so an average draw is best derived from
+`rate(midea_total_energy_kwh[1h])`. Like the MCP listener, the metrics
+listener stays loopback-only unless `--http-allow-remote` is passed.
+
+## Container image
+
+```sh
+make docker-build    # mheers/midea-mcp-control:<version>
+make docker-push     # build and push to Docker Hub
+```
+
+The image is a static `CGO_ENABLED=0` binary on Alpine. The device inventory is
+**never** baked in: mount or materialize `devices.json` (mode `0600`) at
+`$HOME/.config/midea-mcp-control/devices.json` and pass
+`MIDEA_MCP_CONTROL_TOKEN` in the environment, e.g.
+
+```sh
+docker run -d -p 127.0.0.1:9103:9103 \
+  -e MIDEA_MCP_CONTROL_TOKEN=... \
+  -v /secure/devices.json:/root/.config/midea-mcp-control/devices.json:ro \
+  mheers/midea-mcp-control:$(bin/midea-mcp-control version) \
+  mcp --http --http-addr 0.0.0.0:8765 --http-allow-remote \
+      --http-allowed-hosts midea --metrics-addr 0.0.0.0:9103
+```
 
 ## Token lifetime
 

@@ -31,6 +31,11 @@ type HTTPConfig struct {
 	// AllowRemote permits a non-loopback bind. The authentication and
 	// DNS-rebinding protections stay on regardless.
 	AllowRemote bool
+	// AllowedHosts lists additional Host header names (ports are ignored)
+	// accepted beyond the always-allowed loopback names. A container behind a
+	// Docker service name needs its name here; the default stays
+	// loopback-only. Bearer authentication applies to every accepted name.
+	AllowedHosts []string
 }
 
 // HTTPServer serves MCP over Streamable HTTP.
@@ -48,18 +53,43 @@ func NewHTTPServer(service *Service, config HTTPConfig) (*HTTPServer, error) {
 	if config.Addr == "" {
 		config.Addr = "127.0.0.1:8765"
 	}
-	host, _, err := net.SplitHostPort(config.Addr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid listen address %q: %w", config.Addr, err)
-	}
-	if err := checkLoopback(host, config.AllowRemote); err != nil {
+	if err := CheckListenAddress(config.Addr, config.AllowRemote); err != nil {
 		return nil, err
 	}
+	config.AllowedHosts = normalizeHosts(config.AllowedHosts)
 	return &HTTPServer{
 		config:  config,
 		service: service,
 		server:  NewMCPServer(service),
 	}, nil
+}
+
+// normalizeHosts trims allow-list entries and drops any :port suffix, so both
+// "midea" and "midea:8765" name the same host.
+func normalizeHosts(hosts []string) []string {
+	normalized := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		if name, _, err := net.SplitHostPort(host); err == nil {
+			host = name
+		}
+		normalized = append(normalized, host)
+	}
+	return normalized
+}
+
+// CheckListenAddress refuses a non-loopback bind address unless it was
+// explicitly allowed. It guards both the MCP listener and the Prometheus
+// metrics listener.
+func CheckListenAddress(addr string, allowRemote bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	return checkLoopback(host, allowRemote)
 }
 
 // checkLoopback refuses a non-loopback bind unless it was asked for.
@@ -88,13 +118,37 @@ func checkLoopback(host string, allowRemote bool) error {
 }
 
 // Handler returns the HTTP handler with authentication and DNS-rebinding
-// protection in front of the MCP endpoint.
+// protection in front of the MCP endpoint. /healthz is answered without
+// authentication and carries no data — it exists for container healthchecks
+// and uptime probes, matching the other showboat MCP sidecars.
 func (h *HTTPServer) Handler() http.Handler {
 	inner := sdkmcp.NewStreamableHTTPHandler(
 		func(*http.Request) *sdkmcp.Server { return h.server },
-		&sdkmcp.StreamableHTTPOptions{Stateless: h.config.Stateless},
+		&sdkmcp.StreamableHTTPOptions{
+			Stateless: h.config.Stateless,
+			// protect() below runs its own Host/Origin validation on every
+			// request (loopback by default plus the explicit allow-list). The
+			// SDK's built-in loopback check would additionally reject
+			// allow-listed host names whenever the listener binds to loopback,
+			// making behavior depend on the bind address, so it is disabled in
+			// favor of the single, always-on check.
+			DisableLocalhostProtection: true,
+		},
 	)
-	return h.protect(inner)
+	protected := h.protect(inner)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/healthz" {
+			if request.Method != http.MethodGet && request.Method != http.MethodHead {
+				writer.Header().Set("Allow", "GET, HEAD")
+				http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte("ok"))
+			return
+		}
+		protected.ServeHTTP(writer, request)
+	})
 }
 
 // protect applies bearer authentication, Host validation and Origin
@@ -107,7 +161,7 @@ func (h *HTTPServer) protect(next http.Handler) http.Handler {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if !validHost(request.Host) {
+		if !validHost(request.Host, h.config.AllowedHosts) {
 			http.Error(writer, "forbidden: bad host", http.StatusForbidden)
 			return
 		}
@@ -139,9 +193,11 @@ func (h *HTTPServer) authorized(request *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(presented), []byte(h.config.Token)) == 1
 }
 
-// validHost rejects a Host header that is not a loopback name, which is the
-// other half of the DNS-rebinding defence.
-func validHost(host string) bool {
+// validHost reports whether a Host header is acceptable: a loopback name or
+// one of the explicitly allowed host names. The allow-list is what lets a
+// container be reached as http://midea:8765/mcp without weakening the
+// loopback-only default.
+func validHost(host string, allowed []string) bool {
 	if host == "" {
 		return false
 	}
@@ -152,18 +208,27 @@ func validHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	for _, candidate := range allowed {
+		if strings.EqualFold(candidate, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // validOrigin allows only loopback origins. An empty Origin (a non-browser
-// client) is allowed; the bearer token is what protects those.
+// client) is allowed; the bearer token is what protects those. The host
+// allow-list deliberately does not extend here: browsers may only drive the
+// endpoint from loopback pages.
 func validOrigin(origin string) bool {
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Host == "" {
 		return false
 	}
-	return validHost(parsed.Host)
+	return validHost(parsed.Host, nil)
 }
 
 // GenerateToken returns a random bearer token.
