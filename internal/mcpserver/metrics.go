@@ -126,7 +126,8 @@ func NewMetricsExporter(service *Service, config MetricsConfig) *MetricsExporter
 		Name: "midea_total_energy_kwh",
 		Help: "Lifetime consumption in kWh as reported by the unit. A gauge rather than a counter: " +
 			"it is a device register that resets on a power or firmware reset, so it can decrease. " +
-			"Derive average power with clamp_min(delta(midea_total_energy_kwh[1h]), 0)/3600.",
+			"Average kW over a one-hour window: clamp_min(delta(midea_total_energy_kwh[1h]), 0); " +
+			"multiply by 1000 for watts.",
 	}, []string{"name"})
 	exporter.runEnergy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "midea_current_run_energy_kwh",
