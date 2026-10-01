@@ -29,3 +29,10 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
+
+// Fork fix: decode the 0xC1 energy registers as 0.01 kWh BCD (/100), matching
+// midea_ac_lan's analysis_method=3. Upstream thekondor/midea-porta-split
+// divides by 10, publishing midea_total_energy_kwh and
+// midea_current_run_energy_kwh 10x too high (verified against the Shelly
+// Pro 3EM whole-house meter and the reference implementation).
+replace github.com/thekondor/midea-porta-split => github.com/mheers/midea-porta-split v0.0.0-20261001162211-06d699871266
