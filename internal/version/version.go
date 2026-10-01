@@ -2,4 +2,4 @@
 package version
 
 // Value is the current midea-mcp-control version.
-const Value = "0.1.0"
+const Value = "0.1.1"
