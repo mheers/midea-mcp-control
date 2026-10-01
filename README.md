@@ -318,21 +318,38 @@ do not tear holes into the history.
 | metric | meaning |
 |---|---|
 | `midea_up{name}` | 1 when the last poll succeeded |
+| `midea_last_poll_timestamp_seconds{name}` | Unix time of the last successful poll |
 | `midea_power_on{name}` | power state |
-| `midea_mode{name,mode}` | current mode; exactly one series per device is 1 |
-| `midea_fan_speed{name,speed}` | fan speed; exactly one series per device is 1 |
+| `midea_mode{name,mode}` | current mode; exactly one series per device is 1; `unknown` if unrecognized |
+| `midea_fan_speed{name,speed}` | fan speed; exactly one series per device is 1; `unknown` if unrecognized |
 | `midea_target_temperature_celsius{name}` | target temperature |
 | `midea_indoor_temperature_celsius{name}` | room sensor |
 | `midea_outdoor_temperature_celsius{name}` | outdoor-unit-side reading |
 | `midea_humidity_percent{name}` | room humidity; `0` on models without a sensor |
 | `midea_error{name}`, `midea_error_code{name}` | fault state |
-| `midea_total_energy_kwh{name}` | lifetime consumption (monotonic while running) |
+| `midea_total_energy_kwh{name}` | lifetime consumption, `0` on units that cannot report it |
 | `midea_current_run_energy_kwh{name}` | consumption of the current run |
 
+Because last-good values persist, a stale reading is indistinguishable from a
+fresh one in the gauges above. Alert on the poll timestamp to notice a unit
+going stale rather than silently reporting old numbers:
+
+```
+time() - midea_last_poll_timestamp_seconds > 300
+```
+
 The realtime power field is zero on the hardware validated here (see
-[Scope](#scope)), so an average draw is best derived from
-`rate(midea_total_energy_kwh[1h])`. Like the MCP listener, the metrics
-listener stays loopback-only unless `--http-allow-remote` is passed.
+[Scope](#scope)), so an average draw is derived from the lifetime counter. It
+is a device register that resets on a power or firmware reset, not a Prometheus
+counter, so `rate()` would report a large negative value after a reset. Clamp
+it instead:
+
+```
+clamp_min(delta(midea_total_energy_kwh[1h]), 0) / 3600   # average kW
+```
+
+Like the MCP listener, the metrics listener stays loopback-only unless
+`--http-allow-remote` is passed.
 
 ## Container image
 
