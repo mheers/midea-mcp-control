@@ -21,10 +21,15 @@ The library research and protocol notes behind these choices are in
 - The Midea cloud protocol is reverse-engineered and undocumented. The LAN side
   is stable in practice; the cloud bootstrap endpoints can change without
   notice. If `bootstrap` ever stops working, normal local control will not.
-- The LAN protocol dependency is a community project pinned to a single
-  immutable commit. It was written for one specific appliance, so decoding
-  beyond the fields listed under [Scope](#scope) is unvalidated. It sits behind
-  a small internal interface so it can be replaced.
+- The LAN protocol dependency is a community project pinned through a
+  [`replace` directive](https://github.com/mheers/midea-porta-split) to a fork
+  that decodes the 0xC1 energy registers in 0.01 kWh units. Upstream divides
+  the same BCD bytes by 10 and publishes `midea_total_energy_kwh` and
+  `midea_current_run_energy_kwh` 10x too high — one unit claimed 35.9 kWh over
+  a day on which the whole house (Shelly Pro 3EM) consumed 14.3 kWh. The
+  remaining decoding, beyond the fields listed under [Scope](#scope), is
+  unvalidated: it was written for one specific appliance. It sits behind a
+  small internal interface so it can be replaced.
 - `sleep`, `eco`, `turbo` and `display` are not honoured by the hardware tested
   here, and `swing` only works while a unit is running. These are properties of
   the firmware, not of this tool.
@@ -345,8 +350,19 @@ counter, so `rate()` would report a large negative value after a reset. Clamp
 it instead:
 
 ```
-clamp_min(delta(midea_total_energy_kwh[1h]), 0) / 3600   # average kW
+clamp_min(delta(midea_total_energy_kwh[1h]), 0)   # average kW over the hour
 ```
+
+The delta over a one-hour window is the energy consumed during that hour, so
+dividing by the window length in hours (1) is already the average kW; multiply
+by 1000 for watts. Over a window of `w` seconds the average kW is
+`clamp_min(delta(midea_total_energy_kwh[w]), 0) * 3600 / w` — note that there
+is no `/ 3600` for the one-hour case, which would produce kWh per second.
+
+The registers are 0.01 kWh BCD values as of 0.1.2. Releases 0.1.0 and 0.1.1
+decoded them as 0.1 kWh and published both energy series 10x too high, so
+samples scraped before the upgrade must be divided by 10 before comparing them
+with new data.
 
 Like the MCP listener, the metrics listener stays loopback-only unless
 `--http-allow-remote` is passed.
